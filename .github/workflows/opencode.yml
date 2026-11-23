@@ -35,11 +35,26 @@ jobs:
         run: |
           test -f opencode.json
           test -f docs/agents/opencode-github.md
-          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}"
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}const a=c.agent&&c.agent.readonly;if(!a||a.mode!=='primary'||!a.permission||a.permission.edit!=='deny'||a.permission.bash!=='deny'||a.permission.task!=='deny')throw new Error('read-only agent is not configured')"
           test -f .agents/skills/to-spec/SKILL.md
           test -f .agents/skills/to-tickets/SKILL.md
           test -f .agents/skills/implement-spec/SKILL.md
           echo "OpenCode config, instructions and agent skills are available"
+
+      # read-only для объяснений, triage и анализа требований; write-навыки — только по явному запросу.
+      - name: Choose OpenCode agent
+        id: agent_mode
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const body = context.payload.comment.body.toLowerCase()
+            const writeIntent = /(?:^|[\s.,])(?:запусти|запустить|выполни|выполнить|используй|использовать|вызови|вызвать|примени|переходи|перейди|run|use|apply|execute)\s+(?:скилл\s+)?(?:to-spec|to-tickets|implement-spec)\b|\/(?:oc|opencode)\s+(?:to-spec|to-tickets|implement-spec)\b|\/(?:to-spec|to-tickets|implement-spec)\b/i.test(body)
+            core.setOutput('name', writeIntent ? 'build' : 'readonly')
+            core.setOutput('write', writeIntent ? 'true' : 'false')
+
+      - name: Verify clean worktree before OpenCode
+        run: |
+          test -z "$(git status --porcelain)"
 
       # Действие OpenCode чекаутит ветку PR, поэтому не передаём секреты в PR из форка.
       - name: Verify pull request is not from a fork
@@ -67,5 +82,18 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/deepseek-v4.1-flash-free
+          agent: ${{ steps.agent_mode.outputs.name }}
           mentions: /opencode,/oc
           share: false
+
+      # Экшн сам коммитит грязное дерево и открывает PR. Для read-only это недопустимо.
+      - name: Verify read-only run left the worktree clean
+        if: steps.agent_mode.outputs.write != 'true' && steps.pr_source.outputs.trusted != 'false'
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "OpenCode changed files in read-only mode"
+            git status --short
+            git reset --hard HEAD
+            git clean -fd
+            exit 1
+          fi
