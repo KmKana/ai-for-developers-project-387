@@ -79,7 +79,7 @@ run = "npm run build"
 description = "Браузерный E2E с настоящими React и Spring Boot (финальный шаг check)"
 # E2E поднимает серверы только после успеха всех остальных проверок: при падении
 # любой из них mise не запустит E2E, поэтому фоновые серверы не останутся.
-wait_for = ["lint", "test", "test-frontend", "build-frontend", "check-contract", "test-check-gate", "test-release-please", "test-opencode-budget"]
+wait_for = ["lint", "test", "test-frontend", "build-frontend", "check-contract", "test-check-gate", "test-release-please", "test-opencode-budget", "test-opencode-concurrency"]
 dir = "frontend"
 # Порты 18080/15173 фиксированы: lock не даёт двум прогонам E2E на одной машине
 # бороться за них. Playwright сам останавливает серверы при любом исходе теста.
@@ -102,11 +102,15 @@ run = "node --test scripts/release-please.test.mjs"
 description = "Проверить расчёт бюджета вызовов OpenCode без вызова модели"
 run = "node --test scripts/opencode-budget.test.mjs"
 
+[tasks.test-opencode-concurrency]
+description = "Проверить, что комментарий бота не отменяет пользовательский запуск OpenCode"
+run = "node --test scripts/opencode-concurrency.test.mjs"
+
 [tasks.check]
 description = "Единый шлюз: линтеры, JUnit, Vitest, сборка, контракт, релиз и браузерный E2E"
 # lint-backend и check-contract идут параллельно, остальное упорядочено через
 # wait_for. Если любая проверка падает, E2E не запускается.
-depends = ["lint", "test", "test-frontend", "build-frontend", "check-contract", "test-check-gate", "test-release-please", "test-opencode-budget", "test-e2e"]
+depends = ["lint", "test", "test-frontend", "build-frontend", "check-contract", "test-check-gate", "test-release-please", "test-opencode-budget", "test-opencode-concurrency", "test-e2e"]
 
 # --- Разработка ---
 

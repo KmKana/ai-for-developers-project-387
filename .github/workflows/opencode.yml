@@ -14,9 +14,13 @@ permissions:
   contents: read
   id-token: write
 
-# Один активный запуск на Issue/PR: у issues и PR общее пространство номеров.
+# Один активный запуск на Issue/PR для одного автора комментария.
+# Актор в группе обязателен: бот (opencode-agent[bot]) публикует свой ответ
+# новым комментарием, это создаёт новый запуск, и при общей группе он отменял
+# пользовательский запуск. Разные акторы больше не конкурируют, а два
+# комментария одного пользователя по-прежнему отменяют устаревший запуск.
 concurrency:
-  group: opencode-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: opencode-${{ github.event.issue.number || github.event.pull_request.number }}-${{ github.event.comment.user.id }}
   cancel-in-progress: true
 
 jobs:
