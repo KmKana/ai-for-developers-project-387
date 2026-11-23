@@ -16,13 +16,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  opencode:
+  # Маршрутизация без секретов: define write-намерение и доверенность PR из форка.
+  route:
     if: >-
       github.event.comment.user.login == 'KmKana' &&
       github.event.comment.user.type != 'Bot' &&
       (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode'))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      write: ${{ steps.access_mode.outputs.write }}
+      trusted: ${{ steps.pr_source.outputs.trusted }}
+    steps:
+      # Write-режимом считается только явный запуск одного из write-навыков.
+      # Упоминание навыка в запрете ("не запускай implement-spec") не переключает режим.
+      - name: Choose OpenCode access mode
+        id: access_mode
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const body = context.payload.comment.body.toLowerCase()
+            const writeIntent = /(?:^|[\s.,])(?:запусти|запустить|выполни|выполнить|используй|использовать|вызови|вызвать|примени|переходи|перейди|run|use|apply|execute)\s+(?:скилл\s+)?(?:to-spec|to-tickets|implement-spec)\b|\/(?:oc|opencode)\s+(?:to-spec|to-tickets|implement-spec)\b|\/(?:to-spec|to-tickets|implement-spec)\b/i.test(body)
+            core.setOutput('write', writeIntent ? 'true' : 'false')
+
+      # Действие OpenCode чекаутит ветку PR, поэтому не передаём секреты в PR из форка.
+      - name: Verify pull request is not from a fork
+        id: pr_source
+        if: github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const number = context.payload.pull_request?.number ?? context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: number,
+            });
+            const trusted = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            core.setOutput('trusted', trusted ? 'true' : 'false');
+            if (!trusted) {
+              core.info(`PR #${number} head is in ${pr.head.repo.full_name}; skipping the jobs that use secrets.`);
+            }
+
+  # Обычные комментарии: explain, triage, анализ требований. Право write на Issues не выдаётся.
+  opencode-readonly:
+    needs: route
+    if: needs.route.outputs.write != 'true' && needs.route.outputs.trusted != 'false'
+    runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -43,50 +88,22 @@ jobs:
           test -f .agents/skills/implement-spec/SKILL.md
           echo "OpenCode config, instructions and agent skills are available"
 
-      # Для объяснений, triage и анализа включаем inline-конфиг с default_agent: readonly.
-      # Write-навыки остаются на агенте build из основного opencode.json.
-      - name: Choose OpenCode access mode
-        id: access_mode
+      - name: Build read-only inline config
+        id: readonly_config
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs')
-            const body = context.payload.comment.body.toLowerCase()
-            const writeIntent = /(?:^|[\s.,])(?:запусти|запустить|выполни|выполнить|используй|использовать|вызови|вызвать|примени|переходи|перейди|run|use|apply|execute)\s+(?:скилл\s+)?(?:to-spec|to-tickets|implement-spec)\b|\/(?:oc|opencode)\s+(?:to-spec|to-tickets|implement-spec)\b|\/(?:to-spec|to-tickets|implement-spec)\b/i.test(body)
-            core.setOutput('write', writeIntent ? 'true' : 'false')
-            if (!writeIntent) {
-              const config = JSON.parse(fs.readFileSync('opencode.readonly.json', 'utf8'))
-              if (config.default_agent !== 'readonly') throw new Error('default_agent must be readonly')
-              core.setOutput('config', JSON.stringify(config))
-            }
+            const config = JSON.parse(fs.readFileSync('opencode.readonly.json', 'utf8'))
+            if (config.default_agent !== 'readonly') throw new Error('default_agent must be readonly')
+            core.setOutput('config', JSON.stringify(config))
 
       - name: Verify clean worktree before OpenCode
         run: |
           test -z "$(git status --porcelain)"
 
-      # Действие OpenCode чекаутит ветку PR, поэтому не передаём секреты в PR из форка.
-      - name: Verify pull request is not from a fork
-        id: pr_source
-        if: github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const number = context.payload.pull_request?.number ?? context.payload.issue.number;
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: number,
-            });
-            const trusted = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
-            core.setOutput('trusted', trusted ? 'true' : 'false');
-            if (!trusted) {
-              core.info(`PR #${number} head is in ${pr.head.repo.full_name}; skipping the step that uses secrets.`);
-            }
-
-      # Локальная копия экшна с anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a
-      # и явно закреплённой версией CLI 1.19.6 (без кэша по "latest").
+      # Авторизация OpenCode по-прежнему через GitHub App (OIDC). GH_TOKEN не передаётся.
       - name: Run OpenCode
-        if: steps.pr_source.outputs.trusted != 'false'
         uses: ./.github/actions/opencode-pinned
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -94,11 +111,10 @@ jobs:
           model: opencode/deepseek-v4.1-flash-free
           mentions: /opencode,/oc
           share: false
-          config_content: ${{ steps.access_mode.outputs.config }}
+          config_content: ${{ steps.readonly_config.outputs.config }}
 
       # Экшн сам коммитит грязное дерево и открывает PR. Для read-only это недопустимо.
       - name: Verify read-only run left the worktree clean
-        if: steps.access_mode.outputs.write != 'true' && steps.pr_source.outputs.trusted != 'false'
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             echo "OpenCode changed files in read-only mode"
@@ -107,3 +123,56 @@ jobs:
             git clean -fd
             exit 1
           fi
+
+  # Явные to-spec, to-tickets и implement-spec: отдельный job с issues: write.
+  # GH_TOKEN нужен только agent'у внутри запуска (для gh), авторизация самого
+  # OpenCode GitHub Action остаётся на GitHub App через OIDC.
+  opencode-write:
+    needs: route
+    if: needs.route.outputs.write == 'true' && needs.route.outputs.trusted != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify OpenCode configuration and skills
+        run: |
+          test -f opencode.json
+          test -f opencode.readonly.json
+          test -f docs/agents/opencode-github.md
+          node -e "const fs=require('fs');for(const file of ['opencode.json','opencode.readonly.json']){const c=JSON.parse(fs.readFileSync(file,'utf8'));if(c['\$schema']!=='https://opencode.ai/config.json')throw new Error(file+' is missing \$schema');for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}}const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));const a=c.agent&&c.agent.readonly;if(!a||a.mode!=='primary'||!a.permission||a.permission.edit!=='deny'||a.permission.bash!=='deny'||a.permission.task!=='deny')throw new Error('read-only agent is not configured')"
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.readonly.json','utf8'));if(c.default_agent!=='readonly')throw new Error('read-only config must use default_agent: readonly');for(const p of ['edit','bash','task','webfetch','websearch','todowrite','lsp','question'])if(c.permission[p]!=='deny')throw new Error('missing read-only deny for '+p);if(JSON.stringify(c.permission.external_directory)!=='{\"*\":\"deny\"}')throw new Error('external_directory must be denied')"
+          test -f .agents/skills/to-spec/SKILL.md
+          test -f .agents/skills/to-tickets/SKILL.md
+          test -f .agents/skills/implement-spec/SKILL.md
+          echo "OpenCode config, instructions and agent skills are available"
+
+      - name: Verify clean worktree before OpenCode
+        run: |
+          test -z "$(git status --porcelain)"
+
+      - name: Verify GitHub CLI authentication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$GH_TOKEN"
+          gh auth status
+
+      - name: Run OpenCode
+        uses: ./.github/actions/opencode-pinned
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        with:
+          model: opencode/deepseek-v4.1-flash-free
+          mentions: /opencode,/oc
+          share: false
+          gh_token: ${{ github.token }}

@@ -16,7 +16,7 @@
   },
   "agent": {
     "build": {
-      "steps": 20
+      "steps": 50
     },
     "readonly": {
       "mode": "primary",
