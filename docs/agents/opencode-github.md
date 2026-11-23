@@ -37,6 +37,15 @@ CLI OpenCode `1.19.6` игнорирует вход `agent` экшна: сесс
 
 Workflow проверяет чистое рабочее дерево до запуска агента. После read-only запуска проверка повторяется; если файлы всё же изменились, job завершается ошибкой.
 
+## Автоматический triage новых Issues
+
+Отдельный workflow `.github/workflows/opencode-triage.yml` срабатывает только на `issues: [opened]` и только для Issues от `KmKana`, у которых автор не бот. Он повторно читает Issue через API (метки могут появиться после `opened`) и пропускает triage, если:
+
+- Issue похоже на созданное навыками `to-spec`/`to-tickets` (в том числе по маркерам `Part of #N`, `## Что сделать`, `Спецификация:`);
+- у Issue уже стоит одна из статусных меток из `docs/agents/triage-labels.md`: `ready-for-agent`, `ready-for-human` или `wontfix`.
+
+Автоматический triage использует тот же закреплённый OpenCode Action, `OPENCODE_API_KEY`, OIDC-авторизацию и inline-конфиг `opencode.readonly.json`. `GH_TOKEN` не передаётся, `issues: write` не выдаётся: агент только анализирует Issue и код, а ответ публикуется инфраструктурой экшна как комментарий. Навыки `to-spec`, `to-tickets` и `implement-spec` в prompt'е явно запрещены, а параметр `skill` в readonly-конфиге технически заблокирован.
+
 ## Версии
 
 Workflow использует локальную копию действия из `.github/actions/opencode-pinned`, собранную по `anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a`. Установка OpenCode выполняется явно с `--version 1.19.6` и проверкой `opencode --version`; кэш по «последнему релизу» upstream-экшна не используется. Агент `build` ограничен 50 шагами (было 20), чтобы `to-spec` и `to-tickets` успевали опубликовать результат; read-only агент остаётся на 20 шагах. Таймаут каждого job'а — 15 минут.
