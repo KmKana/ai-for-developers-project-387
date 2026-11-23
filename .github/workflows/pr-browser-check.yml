@@ -1,0 +1,72 @@
+name: browser-check
+
+# Независимая браузерная проверка PR: отдельный workflow, отдельный runner,
+# точный head SHA из события. Секреты не используются, поэтому workflow
+# безопасен и для PR из форков.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      # refs/pull/<n>/head — это точный head commit PR; он доступен и для форков.
+      - name: Check out pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact head SHA
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          actual="$(git rev-parse HEAD)"
+          echo "expected=$EXPECTED_SHA"
+          echo "actual=$actual"
+          test "$actual" = "$EXPECTED_SHA"
+
+      - name: Install mise and project tools
+        uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.12
+          install: true
+          cache: true
+
+      - name: Verify Chrome for browser E2E
+        run: google-chrome --version
+
+      - name: Install project dependencies
+        run: mise run install
+
+      - name: Run browser E2E for the exact head SHA
+        working-directory: frontend
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          npx playwright test -c playwright.pr.config.ts
+          echo "browser E2E passed for $EXPECTED_SHA"
+
+      - name: Upload Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-pr-${{ github.event.pull_request.head.sha }}
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: warn
+          retention-days: 7

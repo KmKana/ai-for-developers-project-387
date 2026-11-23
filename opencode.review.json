@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "reviewer",
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": {
+      "*": "deny"
+    },
+    "question": "deny",
+    "todowrite": "deny",
+    "skill": {
+      "*": "deny"
+    },
+    "lsp": "deny"
+  },
+  "agent": {
+    "reviewer": {
+      "mode": "primary",
+      "description": "Independent read-only reviewer for pull requests.",
+      "prompt": "You are an independent code reviewer. Read the PR diff, REVIEW.md, the agreed specification and the CI evidence in the provided context files. Do not modify files, run shell commands, create branches, commits or pull requests, use the network, or invoke skills and subagents. Do not propose that the workflow apply fixes. Report findings only; the workflow publishes your text as an advisory review.",
+      "steps": 30,
+      "permission": {
+        "*": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": {
+          "*": "deny"
+        },
+        "question": "deny",
+        "todowrite": "deny",
+        "skill": {
+          "*": "deny"
+        },
+        "lsp": "deny"
+      }
+    }
+  },
+  "experimental": {
+    "continue_loop_on_deny": true
+  }
+}
