@@ -1,0 +1,16 @@
+{
+  "name": "callbooking-api-contract",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TypeSpec-контракт API сервиса «Запись на звонок»",
+  "scripts": {
+    "generate": "tsp compile ."
+  },
+  "dependencies": {
+    "@typespec/compiler": "1.18.0",
+    "@typespec/http": "1.18.0",
+    "@typespec/openapi": "1.18.0",
+    "@typespec/openapi3": "1.18.0",
+    "@typespec/rest": "0.88.0"
+  }
+}

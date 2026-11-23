@@ -1,0 +1,4 @@
+dist
+src/sdk
+test-results
+playwright-report

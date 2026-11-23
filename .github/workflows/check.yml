@@ -1,0 +1,38 @@
+name: check
+
+# Единый шлюз проекта: CI выполняет ту же команду, что и разработчик локально.
+# Workflow Hexlet и release-please намеренно не изменяются.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # Playwright использует channel: 'chrome'. В образе ubuntu-24.04 Google Chrome
+    # уже предустановлен (см. https://github.com/actions/runner-images), поэтому
+    # отдельная установка Chrome для Testing не нужна: она не гарантирует путь,
+    # который Playwright ищет для channel 'chrome'.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install mise and project tools
+        uses: jdx/mise-action@v5
+        with:
+          version: 2026.11.12
+          install: true
+          cache: true
+
+      - name: Verify Chrome for browser E2E
+        run: google-chrome --version
+
+      - name: Install project dependencies
+        run: mise run install
+
+      - name: Run all checks
+        run: mise run check

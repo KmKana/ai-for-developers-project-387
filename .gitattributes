@@ -1,0 +1,4 @@
+# Сгенерированные артефакты контракта всегда хранятся с LF:
+# генераторы пишут LF, а core.autocrlf на Windows не должен создавать расхождение.
+api/openapi/openapi.yaml text eol=lf
+frontend/src/sdk/** text eol=lf

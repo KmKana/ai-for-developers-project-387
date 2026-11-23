@@ -1,0 +1,133 @@
+# Окружение разработки проекта «Запись на звонок».
+# Инструменты: https://mise.jdx.dev — после установки mise выполните
+# `mise install` (скачает версии ниже) и `mise run install` (зависимости проекта).
+
+[settings]
+# experimental нужен для daemons (фоновые dev-серверы).
+experimental = true
+
+[tools]
+java = "21"
+maven = "3.9.6"
+node = "24.22.3"
+# Менеджер процессов для [daemons]; если mise скажет, что версии нет,
+# посмотрите актуальный тег на https://github.com/jdx/pitchfork/releases
+pitchfork = "2.36.0"
+
+# --- Установка ---
+
+[tasks.install]
+description = "Установить зависимости бэкенда и фронтенда"
+depends = ["install-backend", "install-contract", "install-frontend"]
+
+[tasks.install-backend]
+description = "Собрать бэкенд и скачать зависимости"
+dir = "backend"
+run = "mvn -B -DskipTests package"
+
+[tasks.install-contract]
+description = "Установить зависимости генерации контракта (TypeSpec)"
+dir = "api/tsp"
+run = "npm ci"
+
+[tasks.install-frontend]
+description = "Установить npm-зависимости фронтенда из lockfile"
+dir = "frontend"
+run = "npm ci"
+
+# --- Проверки ---
+
+[tasks.lint]
+description = "Все линтеры: Spotless (Java), ESLint и Prettier (фронтенд)"
+depends = ["lint-backend", "lint-frontend"]
+
+[tasks.lint-backend]
+description = "Проверка формата Java (Spotless)"
+dir = "backend"
+run = "mvn -B spotless:check"
+
+[tasks.lint-frontend]
+description = "ESLint и Prettier на фронтенде"
+# check-contract перегенерирует SDK, который читают все фронтенд-проверки.
+wait_for = ["check-contract"]
+dir = "frontend"
+run = "npm run lint && npm run format:check"
+
+[tasks.test]
+description = "Тесты бэкенда (JUnit 5), включая контрактные и тест конкурентности"
+# Контрактные тесты читают OpenAPI, который перегенерирует check-contract.
+wait_for = ["check-contract"]
+dir = "backend"
+run = "mvn -B test"
+
+[tasks.test-frontend]
+description = "Тесты фронтенда (Vitest)"
+# Vitest чувствителен к 5-секундным таймаутам, поэтому не запускается
+# параллельно с генерацией SDK, сборкой и JUnit. wait_for действует, только когда
+# эти задачи уже есть в прогоне: `mise run test-frontend` работает и автономно.
+wait_for = ["check-contract", "lint-frontend", "build-frontend", "test"]
+dir = "frontend"
+run = "npm run test"
+
+[tasks.build-frontend]
+description = "Проверка типов и сборка фронтенда"
+wait_for = ["check-contract", "lint-frontend"]
+dir = "frontend"
+run = "npm run build"
+
+[tasks.test-e2e]
+description = "Браузерный E2E с настоящими React и Spring Boot (финальный шаг check)"
+# E2E поднимает серверы только после успеха всех остальных проверок: при падении
+# любой из них mise не запустит E2E, поэтому фоновые серверы не останутся.
+wait_for = ["lint", "test", "test-frontend", "build-frontend", "check-contract", "test-check-gate", "test-release-please"]
+dir = "frontend"
+# Порты 18080/15173 фиксированы: lock не даёт двум прогонам E2E на одной машине
+# бороться за них. Playwright сам останавливает серверы при любом исходе теста.
+lock = "callbooking-e2e-ports"
+run = "npm run test:e2e"
+
+[tasks.check-contract]
+description = "Проверить расхождение OpenAPI и SDK с TypeSpec"
+run = "node scripts/check-contract-artifacts.mjs"
+
+[tasks.test-check-gate]
+description = "Проверить, что единый шлюз и CI запускают все проверки"
+run = "node --test scripts/check-gate.test.mjs"
+
+[tasks.test-release-please]
+description = "Проверить конфигурацию release-please без ручного управления версиями"
+run = "node --test scripts/release-please.test.mjs"
+
+[tasks.check]
+description = "Единый шлюз: линтеры, JUnit, Vitest, сборка, контракт, релиз и браузерный E2E"
+# lint-backend и check-contract идут параллельно, остальное упорядочено через
+# wait_for. Если любая проверка падает, E2E не запускается.
+depends = ["lint", "test", "test-frontend", "build-frontend", "check-contract", "test-check-gate", "test-release-please", "test-e2e"]
+
+# --- Разработка ---
+
+[tasks.backend]
+description = "Запустить бэкенд на :8080"
+dir = "backend"
+run = "mvn spring-boot:run"
+
+[tasks.frontend]
+description = "Запустить фронтенд на :5173"
+dir = "frontend"
+run = "npm run dev"
+
+[tasks.hooks]
+description = "Включить git-хуки (pre-commit прогоняет линтеры)"
+run = "git config core.hooksPath .githooks"
+
+# --- Фоновые процессы (нужен experimental = true) ---
+
+[daemons.backend]
+description = "Spring Boot на :8080"
+dir = "backend"
+run = "mvn spring-boot:run"
+
+[daemons.frontend]
+description = "Vite dev-сервер на :5173"
+dir = "frontend"
+run = "npm run dev"

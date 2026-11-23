@@ -1,0 +1,303 @@
+openapi: 3.0.0
+info:
+  title: Call Booking API
+  version: 1.0.0
+  description: |-
+    API упрощённого сервиса записи на звонок по мотивам Cal.com.
+
+    Владелец (один, задан заранее) публикует Типы встреч; Гость выбирает
+    Слот и записывается. Авторизация, внешние календари
+    и уведомления не входят в проект.
+
+    Правила записи:
+    - часовой пояс Владельца: Asia/Almaty, рабочие часы: пн–пт 09:00–18:00;
+    - окно записи: 14 календарных дней, начиная с завтрашнего дня;
+    - шаг доступных стартов: 30 минут, длительность Слота равна
+    длительности выбранного Типа встречи;
+    - один и тот же Слот нельзя занять дважды, включая частичное
+    наложение разных Типов встреч; следующая Запись (встреча) может начинаться
+    в момент окончания предыдущей.
+tags: []
+paths:
+  /api/bookings:
+    post:
+      operationId: Api_createBooking
+      description: Записаться на свободный слот.
+      parameters: []
+      responses:
+        '201':
+          description: Успешный ответ записи на слот (201).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '400':
+          description: 'Ответ об ошибке 400 VALIDATION_ERROR: данные запроса не прошли проверку.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: 'Ответ при конфликте: время недоступно или уже занято.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingInput'
+    get:
+      operationId: Api_listBookings
+      description: Предстоящие Записи Владельца по всем Типам, отсортированные по времени.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Booking'
+  /api/meeting-types:
+    get:
+      operationId: Api_listMeetingTypes
+      description: Каталог Типов встреч Владельца.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MeetingType'
+    post:
+      operationId: Api_createMeetingType
+      description: Создать тип встречи.
+      parameters: []
+      responses:
+        '201':
+          description: Успешный ответ создания типа встречи (201).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeetingType'
+        '400':
+          description: 'Ответ об ошибке 400 VALIDATION_ERROR: данные запроса не прошли проверку.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MeetingTypeInput'
+  /api/slots:
+    get:
+      operationId: Api_listAvailableSlots
+      description: |-
+        Свободные Слоты выбранного Типа встречи в окне завтра + 13 дней по Asia/Almaty.
+
+        Возможные ошибки 400 с общей моделью ApiError:
+        VALIDATION_ERROR — параметр meetingTypeId не передан или некорректен;
+        MEETING_TYPE_NOT_FOUND — тип встречи с таким идентификатором неизвестен.
+      parameters:
+        - name: meetingTypeId
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Slot'
+        '400':
+          description: 'Ответ об ошибке 400 VALIDATION_ERROR: данные запроса не прошли проверку.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+components:
+  schemas:
+    ApiError:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          allOf:
+            - $ref: '#/components/schemas/ApiErrorCode'
+          description: Машинный код ошибки из ApiErrorCode.
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          description: Понятное описание ошибки, которое показывает интерфейс.
+      description: |-
+        Единый формат ошибки API: машинный код и понятное сообщение.
+
+        `SLOT_CONFLICT` — единственный код для любого пересечения Слотов
+        [start, end), независимо от совпадения старта и от Типа встречи.
+        Сообщения календарных кодов 409 фиксированы:
+        - SLOT_CONFLICT: «Выбранное время уже занято. Выберите другой слот»;
+        - OFF_GRID: «Начало встречи должно быть на 30-минутной сетке. Выберите другое время.»;
+        - OUTSIDE_WORKING_HOURS: «Встреча должна проходить в рабочие дни с 09:00 до 18:00 по времени Владельца.»;
+        - OUT_OF_WINDOW: «Запись доступна на ближайшие 14 дней. Выберите другую дату.».
+        Код `INTERNAL_ERROR` сопровождает 500 с сообщением «Внутренняя ошибка сервера».
+    ApiErrorCode:
+      type: string
+      enum:
+        - VALIDATION_ERROR
+        - MEETING_TYPE_NOT_FOUND
+        - SLOT_CONFLICT
+        - OFF_GRID
+        - OUTSIDE_WORKING_HOURS
+        - OUT_OF_WINDOW
+        - INTERNAL_ERROR
+      description: 'Все коды ошибок API: клиент выбирает сценарий по коду, а текст берётся из message.'
+    Booking:
+      type: object
+      required:
+        - id
+        - meetingTypeId
+        - meetingTypeName
+        - start
+        - end
+        - guestName
+        - guestEmail
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: Идентификатор записи.
+        meetingTypeId:
+          type: string
+          description: Идентификатор типа встречи.
+        meetingTypeName:
+          type: string
+          description: Название типа встречи на момент записи.
+        start:
+          type: string
+          format: date-time
+          description: Начало встречи (RFC 3339 с часовым поясом Asia/Almaty).
+        end:
+          type: string
+          format: date-time
+          description: 'Конец встречи: начало плюс длительность Типа встречи.'
+        guestName:
+          type: string
+          minLength: 1
+          description: Имя Гостя.
+        guestEmail:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          description: Email Гостя.
+        createdAt:
+          type: string
+          format: date-time
+          description: Момент создания записи.
+      description: Запись Гостя на встречу.
+    BookingInput:
+      type: object
+      required:
+        - meetingTypeId
+        - start
+        - guestName
+        - guestEmail
+      properties:
+        meetingTypeId:
+          type: string
+          description: Идентификатор типа встречи из каталога.
+        start:
+          type: string
+          format: date-time
+          description: 'Начало встречи: свободный старт из списка Слотов (RFC 3339).'
+        guestName:
+          type: string
+          minLength: 1
+          description: Имя Гостя.
+        guestEmail:
+          type: string
+          pattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+          description: Email Гостя.
+      description: Данные для записи на слот.
+    MeetingType:
+      type: object
+      required:
+        - id
+        - name
+        - durationMinutes
+      properties:
+        id:
+          type: string
+          description: Идентификатор типа встречи.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Название, например «Знакомство».
+        description:
+          type: string
+          maxLength: 500
+          description: Описание для гостя, например «Короткий созвон о вашем проекте».
+        durationMinutes:
+          type: integer
+          format: int32
+          minimum: 5
+          maximum: 480
+          description: Длительность встречи в минутах, от 5 до 480.
+      description: Тип встречи, который владелец публикует в каталоге.
+    MeetingTypeInput:
+      type: object
+      required:
+        - name
+        - durationMinutes
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Название, например «Знакомство».
+        description:
+          type: string
+          maxLength: 500
+          description: Описание для гостя.
+        durationMinutes:
+          type: integer
+          format: int32
+          minimum: 5
+          maximum: 480
+          description: Длительность встречи в минутах, от 5 до 480.
+      description: Данные для создания типа встречи.
+    Slot:
+      type: object
+      required:
+        - start
+        - end
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: Начало Слота (RFC 3339 с часовым поясом Asia/Almaty).
+        end:
+          type: string
+          format: date-time
+          description: 'Конец Слота: начало плюс длительность Типа встречи.'
+      description: 'Свободный Слот, который можно занять: на него Гость может записаться.'
+servers:
+  - url: http://localhost:8080
+    description: Локальный сервер разработки
+    variables: {}
