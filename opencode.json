@@ -16,6 +16,24 @@
   "agent": {
     "build": {
       "steps": 20
+    },
+    "readonly": {
+      "mode": "primary",
+      "description": "Read-only agent for explanations, triage and requirement analysis.",
+      "prompt": "You are in read-only mode. Do not change files, run shell commands that write, create branches, commits or pull requests. Answer only with the requested text.",
+      "steps": 20,
+      "permission": {
+        "*": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": {
+          "*": "deny"
+        },
+        "question": "deny"
+      }
     }
   },
   "instructions": ["docs/agents/opencode-github.md"]
