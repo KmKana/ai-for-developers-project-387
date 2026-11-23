@@ -102,13 +102,24 @@ jobs:
         run: |
           test -z "$(git status --porcelain)"
 
+      # Платная модель требует ключ Workspace OpenCode Console. Без секрета job
+      # падает сразу, а не после таймаута на ошибке провайдера.
+      - name: Verify OPENCODE_API_KEY is configured
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo "::error::Repository secret OPENCODE_API_KEY is not configured. Add a key from the OpenCode Console workspace with a positive balance."
+            exit 1
+          fi
+
       # Авторизация OpenCode по-прежнему через GitHub App (OIDC). GH_TOKEN не передаётся.
       - name: Run OpenCode
         uses: ./.github/actions/opencode-pinned
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
-          model: opencode/deepseek-v4.1-flash-free
+          model: opencode/deepseek-v4.1-flash
           mentions: /opencode,/oc
           share: false
           config_content: ${{ steps.readonly_config.outputs.config }}
@@ -166,13 +177,22 @@ jobs:
           test -n "$GH_TOKEN"
           gh auth status
 
+      - name: Verify OPENCODE_API_KEY is configured
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo "::error::Repository secret OPENCODE_API_KEY is not configured. Add a key from the OpenCode Console workspace with a positive balance."
+            exit 1
+          fi
+
       - name: Run OpenCode
         uses: ./.github/actions/opencode-pinned
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           GH_TOKEN: ${{ github.token }}
         with:
-          model: opencode/deepseek-v4.1-flash-free
+          model: opencode/deepseek-v4.1-flash
           mentions: /opencode,/oc
           share: false
           gh_token: ${{ github.token }}
