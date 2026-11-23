@@ -74,7 +74,7 @@ cd frontend && npm run dev
 mise run check
 ```
 
-Он включает Spotless, ESLint/Prettier, JUnit 5 (включая контрактные тесты и `BookingConcurrencyTest`), Vitest, проверку типов и сборку React, проверку расхождений OpenAPI/SDK, тесты самого шлюза, release-please и бюджета OpenCode, а затем браузерный Playwright E2E. Отдельно:
+Он включает Spotless, ESLint/Prettier, JUnit 5 (включая контрактные тесты и `BookingConcurrencyTest`), Vitest, проверку типов и сборку React, проверку расхождений OpenAPI/SDK, тесты самого шлюза, release-please, бюджета OpenCode, concurrency и scheduled audit, а затем браузерный Playwright E2E. Отдельно:
 
 ```bash
 cd backend && ./mvnw test        # JUnit 5
@@ -130,11 +130,45 @@ Job `opencode-readonly` передаёт `OPENCODE_CONFIG_CONTENT` из `opencod
 
 Интерактивные вызовы `/oc` ограничены **тремя вызовами модели на один PR**. Проверка выполняется до вызова модели в `.github/workflows/opencode.yml`; счётчик — история запусков GitHub Actions, где имя запуска содержит номер PR. Повторные (`Re-run`) и отменённые попытки учитываются, а удаление или редактирование комментария бюджет не увеличивает: у агента нет прав на изменение истории запусков. При исчерпании публикуется `budget_status: limit_exhausted` с head SHA и ссылкой на логи; если историю не удалось прочитать, срабатывает fail-closed `budget_status: infra_failed`. Группа `concurrency` включает автора комментария, поэтому финальный комментарий бота не отменяет пользовательский запуск; два `/oc` одного пользователя по-прежнему конкурируют.
 
-Отдельный `.github/workflows/opencode-review.yml` запускается на `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) и делает независимое ревью для PR из этого же репозитория от `KmKana` или GitHub App OpenCode (фактический login бота — `opencode-agent[bot]`). Draft PR, release-please PR и PR из форков пропускаются; `pull_request_target` не используется, поэтому секрет модели не попадает в недоверенный форк. Ревьюер — отдельный агент `reviewer` из `opencode.review.json`: ему запрещены `edit`, `bash`, `task`, сеть, навыки и вопросы, он не получает `GH_TOKEN`, а результат публикует workflow как review от `github-actions[bot]`. Ревьюер читает `REVIEW.md`, спецификацию #17, согласование #7, diff и результаты CI. На PR допускается не более **двух** автоматических вызовов модели, повторный head SHA не ревьюится; статусы `reviewed`, `limit_exhausted`, `same_sha_reviewed`, `timeout`, `agent_failed`, `infra_failed`, `manual_review_required` публикуются в PR. PR, меняющий саму инфраструктуру ревью, получает `manual_review_required` и проверяется человеком. Исправления по комментарию ревьюера автоматически не запускаются.
+Отдельный `.github/workflows/opencode-review.yml` запускается на `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) и делает независимое ревью для PR из этого же репозитория от `KmKana` или GitHub App OpenCode (фактический login бота — `opencode-agent[bot]`). Draft PR, release-please PR и PR из форков пропускаются; `pull_request_target` не используется, поэтому секрет модели не попадает в недоверенный форк. Ревьюер — отдельный агент `reviewer` из `opencode.review.json`: ему запрещены `edit`, `bash`, `task`, сеть, навыки и вопросы, он не получает `GH_TOKEN`, а результат публикует workflow как review от `github-actions[bot]`. Ревьюер читает `REVIEW.md`, спецификацию #17, согласование #7, diff и результаты CI. На PR допускается не более **двух** автоматических вызовов модели, повторный head SHA не ревьюится; статусы `reviewed`, `limit_exhausted`, `same_sha_reviewed`, `timeout`, `agent_failed`, `infra_failed`, `manual_review_required` публикуются в PR. PR, меняющий саму инфраструктуру CI/ревью (workflow, GitHub Action, бюджетный скрипт, конфигурацию OpenCode или критерии `REVIEW.md`), получает `manual_review_required` и проверяется человеком. Исправления по комментарию ревьюера автоматически не запускаются.
 
 `REVIEW.md` содержит критерии ревью: защита от пересечений, конкурентные запросы, корректность Слотов, тема разговора до 300 символов, цепочка TypeSpec → OpenAPI → SDK → Spring Boot → React, регрессии, публичный доступ к данным, доказательства CI и откат. Шаблон PR — `.github/pull_request_template.md`; правила запуска, бюджета и прав — `docs/agents/review.md`.
 
 Независимая браузерная проверка `.github/workflows/pr-browser-check.yml` запускается отдельно от `check`, проверяет точный head SHA PR, поднимает реальные Spring Boot и React и всегда сохраняет Playwright trace/HTML-отчёт в артефакт `playwright-pr-<sha>`. Артефакт с другим SHA не считается доказательством.
+
+### Ежедневный Lighthouse-аудит
+
+Workflow `.github/workflows/scheduled-audit.yml` ежедневно в **09:17 Asia/Almaty** (`cron: "17 9 * * *"`, `timezone: "Asia/Almaty"`) проверяет публичное приложение через Lighthouse, сохраняет JSON/HTML-отчёт, анализирует его через OpenCode и создаёт **один** GitHub Issue по новой находке. Ручной запуск — `workflow_dispatch`.
+
+Параметр `demo_finding=true` использует фиктивный воспроизводимый отчёт `scripts/scheduled-audit/fixtures/demo-lighthouse.json`. Issue помечается `[DEMO]` в заголовке и предупреждением в теле; это учебная находка, а не реальный дефект. В schedule-режиме demo-данные никогда не используются.
+
+**APP_URL.** Адрес не хардкодится: workflow читает GitHub Actions Variable `APP_URL`.
+
+```bash
+gh variable set APP_URL --repo KmKana/ai-for-developers-project-387 --body "https://<current-public-app>"
+```
+
+Или **Settings → Secrets and variables → Actions → Variables → New repository variable**. Укажите текущую публичную сборку этого репозитория. Старый `https://callbooking-uklz.onrender.com` обслуживает старую сборку проекта-386 (без темы разговора) и **не должен** использоваться как `APP_URL`. Если `APP_URL` не задан или страница/Lighthouse недоступны, workflow фиксирует `NO_DATA`, не вызывает модель и не создаёт Issue; job при этом завершается ошибкой, а не «успешным» аудитом.
+
+**Отчёты.** Workflow пишет `lighthouse.json`, `lighthouse.html`, `summary.json`, `issues*.json`, `decision.json`, prompt/agent-output и issue-файлы в `scheduled-audit-output/`. Каталог в `.gitignore`, tracked-файлы не меняются. Всё загружается как artifact `scheduled-audit-<run_id>` (retention 14 дней).
+
+**Issues и дедупликация.** Fingerprint строится из нормализованного `APP_URL`, категории Lighthouse и `audit id` (правила/метрики); значение метрики не входит. Значимой считается находка со score ниже `0.9`; более мелкие аудиты не создают Issue и не вызывают модель. Маркер `<!-- scheduled-audit-fingerprint: sa-v1-… -->` хранится в теле Issue. Перед моделью и повторно перед созданием workflow ищет маркер среди **всех открытых и закрытых** Issues. При совпадении — `DUPLICATE_SKIPPED`, без нового Issue и без нового комментария, со ссылкой на существующий. При отсутствии находки — `NO_FINDING`; при новой — Issue создаётся автоматически. Модель не получает `GH_TOKEN` и не меняет код; Issue создаёт workflow с правом `issues: write`.
+
+**Ошибки.** `NO_DATA` (нет APP_URL/приложение/Lighthouse недоступны), `AGENT_FAILED` (ошибка/таймаут модели), `ISSUE_FAILED` (не удалось создать Issue) видны в summary и artifact; в этих случаях модель не вызывается или Issue не создаётся. Для диагностики смотрите `status.json` и логи запуска.
+
+**Расходы OpenCode.** Используется `opencode/deepseek-v4.1-flash` и секрет `OPENCODE_API_KEY`/`SECRETPAY`. Модель вызывается только при наличии данных и primary finding, если fingerprint ещё не найден; один вызов на новую находку. `NO_DATA`, `NO_FINDING`, `DUPLICATE_SKIPPED` и ошибки сбора данных не вызывают модель. Таймаут модели — 300 секунд, job — 20 минут; автопополнение не включается. Перед включением ежедневного расписания проверьте баланс Workspace.
+
+Подробные статусы, fingerprint, demo-сценарий и ручные команды — в `docs/agents/scheduled-audit.md`.
+
+#### Личные выводы
+
+Заполнить после проверки реальных отчётов; это шаблон, а не готовые выводы:
+
+- Что в отчётах оказалось неожиданным?
+- Какие находки повторяются из запуска в запуск?
+- Где Lighthouse дал ложное срабатывание или шум?
+- Какие исправления дали измеримый эффект?
+- Что изменить в расписании, порогах или формулировке Issue?
 
 ## Запуск через Docker
 
@@ -152,7 +186,7 @@ podman run --rm -e PORT=9090 -p 9090:9090 callbooking
 
 ## Публичный адрес
 
-<https://callbooking-uklz.onrender.com> — существующий Render Web Service на бесплатном тарифе, запущенный из ветки `chore/container-deploy` исходного репозитория. Адрес проверен 23 ноября 2026 года: главная страница отдаёт приложение, `GET /api/meeting-types` возвращает JSON. Новый репозиторий к этому деплою пока не подключён. Render free plan останавливает сервис при простое, а данные при перезапуске сбрасываются — для стабильной проверки используйте локальный запуск или Docker.
+<https://callbooking-uklz.onrender.com> — существующий Render Web Service на бесплатном тарифе, запущенный из ветки `chore/container-deploy` исходного репозитория. Адрес проверен 23 ноября 2026 года: главная страница отдаёт приложение, `GET /api/meeting-types` возвращает JSON. Это **старая сборка проекта-386**: в её JS нет темы разговора, поэтому она не подходит как `APP_URL` для scheduled-audit текущего репозитория. Новый репозиторий к этому деплою пока не подключён. Render free plan останавливает сервис при простое, а данные при перезапуске сбрасываются — для стабильной проверки используйте локальный запуск или Docker.
 
 ## API (кратко)
 

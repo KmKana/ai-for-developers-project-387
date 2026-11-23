@@ -74,16 +74,18 @@ jobs:
           fi
           changed="$(
             git diff --name-only "$BASE_SHA...$HEAD_SHA" -- \
-              .github/workflows/opencode.yml \
-              .github/workflows/opencode-review.yml \
-              .github/workflows/opencode-triage.yml \
-              .github/actions/opencode-pinned/action.yml \
+              .github/workflows/ \
+              .github/actions/ \
+              REVIEW.md \
+              docs/agents/review.md \
+              docs/agents/scheduled-audit.md \
               scripts/opencode-budget.mjs \
+              scripts/opencode-concurrency.mjs \
+              scripts/scheduled-audit/ \
               opencode.json \
               opencode.readonly.json \
               opencode.review.json \
-              REVIEW.md \
-              docs/agents/review.md
+              opencode.audit.json
           )"
           if [ -n "$changed" ]; then
             echo "sensitive=true" >> "$GITHUB_OUTPUT"

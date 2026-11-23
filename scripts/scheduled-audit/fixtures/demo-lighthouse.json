@@ -1,0 +1,54 @@
+{
+  "lighthouseVersion": "12.8.2",
+  "fetchTime": "2026-01-01T09:17:00.000Z",
+  "requestedUrl": "demo://scheduled-audit",
+  "finalUrl": "demo://scheduled-audit",
+  "isDemo": true,
+  "categories": {
+    "performance": {
+      "id": "performance",
+      "title": "Performance",
+      "score": 0.42,
+      "auditRefs": [
+        { "id": "largest-contentful-paint", "weight": 25 },
+        { "id": "total-blocking-time", "weight": 30 }
+      ]
+    },
+    "accessibility": {
+      "id": "accessibility",
+      "title": "Accessibility",
+      "score": 1,
+      "auditRefs": []
+    },
+    "best-practices": {
+      "id": "best-practices",
+      "title": "Best Practices",
+      "score": 1,
+      "auditRefs": []
+    },
+    "seo": {
+      "id": "seo",
+      "title": "SEO",
+      "score": 1,
+      "auditRefs": []
+    }
+  },
+  "audits": {
+    "largest-contentful-paint": {
+      "id": "largest-contentful-paint",
+      "title": "Largest Contentful Paint",
+      "score": 0.15,
+      "scoreDisplayMode": "numeric",
+      "displayValue": "5.8 s",
+      "description": "Largest Contentful Paint marks the time at which the largest text or image is painted. A slow LCP makes the page feel unresponsive."
+    },
+    "total-blocking-time": {
+      "id": "total-blocking-time",
+      "title": "Total Blocking Time",
+      "score": 0.5,
+      "scoreDisplayMode": "numeric",
+      "displayValue": "450 ms",
+      "description": "Total Blocking Time measures the total time the main thread was blocked long enough to affect input responsiveness."
+    }
+  }
+}

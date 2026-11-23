@@ -1,0 +1,474 @@
+name: scheduled-audit
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+      timezone: "Asia/Almaty"
+  workflow_dispatch:
+    inputs:
+      demo_finding:
+        description: "Use the reproducible DEMO report instead of a live Lighthouse audit"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+# Не отменяем уже идущий аудит: два параллельных Lighthouse/модельных запуска
+# не должны конкурировать и создавать разные Issue.
+concurrency:
+  group: scheduled-audit
+  cancel-in-progress: false
+
+env:
+  AUDIT_DIR: scheduled-audit-output
+  ARTIFACT_NAME: scheduled-audit-${{ github.run_id }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare audit directory
+        run: |
+          mkdir -p "$AUDIT_DIR"
+          if ! git check-ignore -q "$AUDIT_DIR"; then
+            echo "::error::$AUDIT_DIR должен быть в .gitignore: отчёты не коммитятся"
+            exit 1
+          fi
+
+      - name: Resolve run mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEMO_INPUT: ${{ github.event.inputs.demo_finding }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DEMO_INPUT" = "true" ]; then
+            echo "demo=true" >> "$GITHUB_OUTPUT"
+            echo "mode=DEMO" >> "$GITHUB_OUTPUT"
+          else
+            echo "demo=false" >> "$GITHUB_OUTPUT"
+            echo "mode=LIVE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check APP_URL and page availability
+        id: app_url
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          DEMO: ${{ steps.mode.outputs.demo }}
+          SHA: ${{ github.sha }}
+        run: |
+          checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [ "$DEMO" = "true" ]; then
+            echo "status=DEMO" >> "$GITHUB_OUTPUT"
+            echo "url=demo://scheduled-audit" >> "$GITHUB_OUTPUT"
+            jq -n \
+              --arg status "DEMO" \
+              --arg mode "DEMO" \
+              --arg url "demo://scheduled-audit" \
+              --arg checked_at "$checked_at" \
+              --arg sha "$SHA" \
+              --arg run_url "$RUN_URL" \
+              --arg artifact "$ARTIFACT_NAME" \
+              '{status:$status,mode:$mode,url:$url,checked_at:$checked_at,sha:$sha,run_url:$run_url,artifact:$artifact,reason:"reproducible demo fixture"}' \
+              > "$AUDIT_DIR/status-initial.json"
+            exit 0
+          fi
+
+          if [ -z "$APP_URL" ]; then
+            code="000"
+            reason="APP_URL variable is not configured"
+          else
+            code="$(curl -L -sS -o /dev/null -w '%{http_code}' --max-time 30 "$APP_URL" || true)"
+            case "$code" in
+              2*|3*) reason="";;
+              *) reason="HTTP $code";;
+            esac
+          fi
+
+          if [ -n "$reason" ]; then
+            status="NO_DATA"
+          else
+            status="READY"
+          fi
+
+          jq -n \
+            --arg status "$status" \
+            --arg mode "LIVE" \
+            --arg url "$APP_URL" \
+            --arg http_code "$code" \
+            --arg reason "$reason" \
+            --arg checked_at "$checked_at" \
+            --arg sha "$SHA" \
+            --arg run_url "$RUN_URL" \
+            --arg artifact "$ARTIFACT_NAME" \
+            '{status:$status,mode:$mode,url:$url,http_code:$http_code,reason:$reason,checked_at:$checked_at,sha:$sha,run_url:$run_url,artifact:$artifact}' \
+            > "$AUDIT_DIR/status-initial.json"
+
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
+
+          if [ "$status" != "READY" ]; then
+            echo "::error::Lighthouse audit not started: $reason"
+            exit 1
+          fi
+
+      - name: Run Lighthouse or load demo fixture
+        id: lighthouse
+        if: steps.app_url.outputs.status == 'READY' || steps.app_url.outputs.status == 'DEMO'
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          DEMO: ${{ steps.mode.outputs.demo }}
+        run: |
+          if [ "$DEMO" = "true" ]; then
+            cp scripts/scheduled-audit/fixtures/demo-lighthouse.json "$AUDIT_DIR/lighthouse.json"
+            node scripts/scheduled-audit/cli.mjs summarize \
+              --report "$AUDIT_DIR/lighthouse.json" \
+              --output "$AUDIT_DIR/summary.json" \
+              --url "demo://scheduled-audit" \
+              --demo
+            echo "status=DEMO" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          chrome_path="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "$chrome_path" ]; then
+            echo "status=NO_DATA" >> "$GITHUB_OUTPUT"
+            jq -n --arg reason "Google Chrome is not available on the runner" \
+              '{status:"NO_DATA",reason:$reason}' > "$AUDIT_DIR/status-lighthouse.json"
+            exit 1
+          fi
+          export CHROME_PATH="$chrome_path"
+
+          set +e
+          npx --yes lighthouse@12.8.2 "$APP_URL" \
+            --quiet \
+            --chrome-flags="--headless --no-sandbox --disable-gpu --disable-dev-shm-usage" \
+            --output=json \
+            --output=html \
+            --output-path="$AUDIT_DIR/lighthouse.report" \
+            > "$AUDIT_DIR/lighthouse.log" 2>&1
+          lighthouse_code=$?
+          set -e
+
+          json_file="$AUDIT_DIR/lighthouse.report.json"
+          html_file="$AUDIT_DIR/lighthouse.report.html"
+          if [ "$lighthouse_code" -ne 0 ] || [ ! -f "$json_file" ] || [ ! -f "$html_file" ]; then
+            echo "status=NO_DATA" >> "$GITHUB_OUTPUT"
+            jq -n --arg reason "Lighthouse failed (exit $lighthouse_code) or produced no report" \
+              '{status:"NO_DATA",reason:$reason}' > "$AUDIT_DIR/status-lighthouse.json"
+            echo "::error::Lighthouse failed; model will not be called"
+            exit 1
+          fi
+
+          cp "$json_file" "$AUDIT_DIR/lighthouse.json"
+          cp "$html_file" "$AUDIT_DIR/lighthouse.html"
+          node scripts/scheduled-audit/cli.mjs summarize \
+            --report "$AUDIT_DIR/lighthouse.json" \
+            --output "$AUDIT_DIR/summary.json" \
+            --url "$APP_URL"
+          echo "status=READY" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch existing open and closed issues
+        id: issues
+        if: steps.lighthouse.outputs.status == 'READY' || steps.lighthouse.outputs.status == 'DEMO'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state all \
+            --limit 1000 \
+            --json number,title,body \
+            > "$AUDIT_DIR/issues.json"
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "status=NO_DATA" >> "$GITHUB_OUTPUT"
+            echo "::error::Не удалось прочитать Issues для дедупликации"
+            exit 1
+          fi
+          jq '[.[] | {number,title}]' "$AUDIT_DIR/issues.json" > "$AUDIT_DIR/issues-summary.json"
+          echo "status=ISSUES" >> "$GITHUB_OUTPUT"
+
+      - name: Decide fingerprint and duplicate status
+        id: decide
+        if: steps.issues.outputs.status == 'ISSUES'
+        env:
+          DEMO: ${{ steps.mode.outputs.demo }}
+          REPO: ${{ github.repository }}
+        run: |
+          args=()
+          if [ "$DEMO" = "true" ]; then args+=(--demo); fi
+          node scripts/scheduled-audit/cli.mjs decide \
+            --summary "$AUDIT_DIR/summary.json" \
+            --issues "$AUDIT_DIR/issues.json" \
+            --output "$AUDIT_DIR/decision.json" \
+            --repo "$REPO" \
+            "${args[@]}"
+          node -e "
+            const d = require('./$AUDIT_DIR/decision.json');
+            console.log('status=' + d.status);
+            console.log('fingerprint=' + (d.fingerprint || ''));
+            console.log('existing=' + (d.existingIssueUrl || ''));
+          " >> "$GITHUB_OUTPUT"
+
+      - name: Analyze with OpenCode
+        id: agent
+        if: steps.decide.outputs.status == 'NEW'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
+          DEMO: ${{ steps.mode.outputs.demo }}
+          SHA: ${{ github.sha }}
+        run: |
+          set +e
+          status="AGENT_FAILED"
+          api_key="${OPENCODE_API_KEY:-}"
+          # Установщик не должен видеть ключ модели: он запускается после unset,
+          # а ключ передаётся только процессу opencode run.
+          unset OPENCODE_API_KEY
+
+          if [ -z "$api_key" ]; then
+            echo "OPENCODE_API_KEY/SECRETPAY is not configured" > "$AUDIT_DIR/agent-error.txt"
+          elif [ ! -f opencode.audit.json ]; then
+            echo "opencode.audit.json is missing" > "$AUDIT_DIR/agent-error.txt"
+          elif ! node -e "const c=require('./opencode.audit.json'); if(c.default_agent!=='auditor'||c.permission.edit!=='deny'||c.permission.bash!=='deny'||c.permission.task!=='deny'||c.permission.webfetch!=='deny'||c.permission.external_directory['*']!=='deny') process.exit(1)"; then
+            echo "opencode.audit.json is not read-only" > "$AUDIT_DIR/agent-error.txt"
+          else
+            curl -fsSL https://opencode.ai/install | bash -s -- --version 1.19.6 > "$AUDIT_DIR/opencode-install.log" 2>&1
+            install_code=$?
+            if [ "$install_code" -ne 0 ]; then
+              echo "OpenCode install failed with $install_code" > "$AUDIT_DIR/agent-error.txt"
+            elif [ "$("$HOME/.opencode/bin/opencode" --version)" != "1.19.6" ]; then
+              echo "Unexpected OpenCode version" > "$AUDIT_DIR/agent-error.txt"
+            else
+              cat > "$AUDIT_DIR/prompt.txt" <<'PROMPT'
+          Ты аналитик производительности. Прочитай фактический отчёт и контекст:
+          - scheduled-audit-output/summary.json — сначала его; компактные категории и падающие аудиты;
+          - scheduled-audit-output/lighthouse.json — полный JSON читай только для выбранного
+            primary audit, если summary недостаточно;
+          - scheduled-audit-output/issues-summary.json — существующие открытые и закрытые Issues (номер и заголовок);
+          - scheduled-audit-output/decision.json — fingerprint и результат dedup.
+
+          Сформулируй одну конкретную проблему, а не пересказ всех показателей.
+          Укажи: что именно происходит, почему это важно для пользователя, возможное
+          исправление и как проверить результат. Проверь, нет ли уже такой задачи среди
+          issues-summary.json; workflow уже исключил точный fingerprint, но похожий Issue
+          может быть без fingerprint. Не дублируй существующую задачу.
+
+          Если новых существенных находок нет — верни STATUS: NO_FINDING.
+          Если есть новая находка — верни STATUS: FINDING. Workflow сам создаст Issue
+          по твоему результату; не создавай Issue, не меняй код и не открывай PR.
+
+          Если summary.json имеет mode=demo, это фиктивный учебный отчёт. Не называй
+          его реальным дефектом приложения; в тексте явно скажи, что это DEMO.
+
+          Формат ответа строго:
+          STATUS: FINDING
+          TITLE: краткий заголовок без [DEMO]
+          BODY:
+          markdown с разделами «Проблема», «Последствия», «Возможное исправление», «Проверка»
+          END_BODY
+
+          или:
+
+          STATUS: NO_FINDING
+
+          Ограничения: не меняй файлы, не выполняй команды, не вызывай gh, сеть,
+          навыки и подзадачи. Не раскрывай секреты. Пиши по-русски, не длиннее 700 слов.
+          PROMPT
+
+              export OPENCODE_CONFIG_CONTENT="$(cat opencode.audit.json)"
+              OPENCODE_API_KEY="$api_key" timeout --signal=TERM --kill-after=20s 300 \
+                "$HOME/.opencode/bin/opencode" run \
+                  --model opencode/deepseek-v4.1-flash \
+                  --agent auditor \
+                  "$(cat "$AUDIT_DIR/prompt.txt")" \
+                > "$AUDIT_DIR/agent-output.txt" 2> "$AUDIT_DIR/agent.log"
+              agent_code=$?
+              if [ "$agent_code" -eq 124 ] || [ "$agent_code" -eq 137 ]; then
+                echo "OpenCode timed out" > "$AUDIT_DIR/agent-error.txt"
+              elif [ "$agent_code" -ne 0 ]; then
+                echo "OpenCode failed with $agent_code" > "$AUDIT_DIR/agent-error.txt"
+              elif [ ! -s "$AUDIT_DIR/agent-output.txt" ]; then
+                echo "OpenCode produced no output" > "$AUDIT_DIR/agent-error.txt"
+              else
+                args=()
+                if [ "$DEMO" = "true" ]; then args+=(--demo); fi
+                node scripts/scheduled-audit/cli.mjs issue \
+                  --agent-output "$AUDIT_DIR/agent-output.txt" \
+                  --summary "$AUDIT_DIR/summary.json" \
+                  --decision "$AUDIT_DIR/decision.json" \
+                  --output-dir "$AUDIT_DIR/issue" \
+                  --run-url "$RUN_URL" \
+                  --sha "$SHA" \
+                  --artifact "$ARTIFACT_NAME" \
+                  "${args[@]}"
+                issue_code=$?
+                if [ "$issue_code" -eq 0 ] && [ -f "$AUDIT_DIR/issue/issue-result.json" ]; then
+                  status="$(node -p "require('./$AUDIT_DIR/issue/issue-result.json').status")"
+                else
+                  echo "Issue rendering failed" > "$AUDIT_DIR/agent-error.txt"
+                fi
+              fi
+            fi
+          fi
+
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "agent_status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Recheck duplicate after analysis
+        id: recheck
+        if: steps.agent.outputs.status == 'FINDING'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEMO: ${{ steps.mode.outputs.demo }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state all \
+            --limit 1000 \
+            --json number,title,body \
+            > "$AUDIT_DIR/issues-after.json"
+          args=()
+          if [ "$DEMO" = "true" ]; then args+=(--demo); fi
+          node scripts/scheduled-audit/cli.mjs decide \
+            --summary "$AUDIT_DIR/summary.json" \
+            --issues "$AUDIT_DIR/issues-after.json" \
+            --output "$AUDIT_DIR/decision-after.json" \
+            --repo "$REPO" \
+            "${args[@]}"
+          node -e "
+            const d = require('./$AUDIT_DIR/decision-after.json');
+            console.log('status=' + d.status);
+            console.log('existing=' + (d.existingIssueUrl || ''));
+          " >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Issue
+        id: create
+        if: steps.agent.outputs.status == 'FINDING' && steps.recheck.outputs.status == 'NEW'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEMO: ${{ steps.mode.outputs.demo }}
+        run: |
+          labels=(--label enhancement)
+          set +e
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$(cat "$AUDIT_DIR/issue/issue-title.txt")" \
+            --body-file "$AUDIT_DIR/issue/issue-body.md" \
+            "${labels[@]}" \
+            > "$AUDIT_DIR/issue-create.out" 2> "$AUDIT_DIR/issue-create.log"
+          code=$?
+          set -e
+          issue_url="$(tail -n 1 "$AUDIT_DIR/issue-create.out")"
+          if [ "$code" -ne 0 ] || [ -z "$issue_url" ]; then
+            echo "status=ISSUE_FAILED" >> "$GITHUB_OUTPUT"
+            echo "::error::Не удалось создать GitHub Issue"
+            exit 1
+          fi
+          printf '%s\n' "$issue_url" > "$AUDIT_DIR/issue-url.txt"
+          echo "status=ISSUE_CREATED" >> "$GITHUB_OUTPUT"
+          echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
+
+      - name: Verify reports are not tracked by Git
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::Рабочее дерево изменилось; отчёты не должны попадать в Git"
+            git status --short
+            exit 1
+          fi
+          git check-ignore -q "$AUDIT_DIR"
+
+      - name: Publish audit status and summary
+        id: result
+        if: always()
+        env:
+          APP_STATUS: ${{ steps.app_url.outputs.status }}
+          LIGHTHOUSE_STATUS: ${{ steps.lighthouse.outputs.status }}
+          ISSUES_STATUS: ${{ steps.issues.outputs.status }}
+          DECIDE_STATUS: ${{ steps.decide.outputs.status }}
+          AGENT_STATUS: ${{ steps.agent.outputs.status }}
+          RECHECK_STATUS: ${{ steps.recheck.outputs.status }}
+          CREATE_STATUS: ${{ steps.create.outputs.status }}
+          ISSUE_URL: ${{ steps.create.outputs.issue_url }}
+          EXISTING_URL: ${{ steps.recheck.outputs.existing || steps.decide.outputs.existing }}
+          FINGERPRINT: ${{ steps.decide.outputs.fingerprint }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          DEMO: ${{ steps.mode.outputs.demo }}
+          SHA: ${{ github.sha }}
+        run: |
+          status="FAILED"
+          if [ "$CREATE_STATUS" = "ISSUE_CREATED" ]; then
+            status="ISSUE_CREATED"
+          elif [ "$RECHECK_STATUS" = "DUPLICATE_SKIPPED" ] || [ "$DECIDE_STATUS" = "DUPLICATE_SKIPPED" ]; then
+            status="DUPLICATE_SKIPPED"
+          elif [ "$AGENT_STATUS" = "NO_FINDING" ] || [ "$DECIDE_STATUS" = "NO_FINDING" ]; then
+            status="NO_FINDING"
+          elif [ "$AGENT_STATUS" = "AGENT_FAILED" ]; then
+            status="AGENT_FAILED"
+          elif [ "$ISSUES_STATUS" = "NO_DATA" ] || [ "$LIGHTHOUSE_STATUS" = "NO_DATA" ] || [ "$APP_STATUS" = "NO_DATA" ]; then
+            status="NO_DATA"
+          elif [ "$CREATE_STATUS" = "ISSUE_FAILED" ]; then
+            status="ISSUE_FAILED"
+          fi
+
+          url=""
+          if [ "$DEMO" = "true" ]; then url="demo://scheduled-audit"; else url="$(jq -r '.url // ""' "$AUDIT_DIR/status-initial.json" 2>/dev/null || true)"; fi
+          jq -n \
+            --arg status "$status" \
+            --arg mode "$MODE" \
+            --arg url "$url" \
+            --arg sha "$SHA" \
+            --arg run_url "$RUN_URL" \
+            --arg artifact "$ARTIFACT_NAME" \
+            --arg issue_url "$ISSUE_URL" \
+            --arg existing_issue_url "$EXISTING_URL" \
+            --arg fingerprint "$FINGERPRINT" \
+            --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{status:$status,mode:$mode,url:$url,sha:$sha,run_url:$run_url,artifact:$artifact,issue_url:$issue_url,existing_issue_url:$existing_issue_url,fingerprint:$fingerprint,checked_at:$checked_at}' \
+            > "$AUDIT_DIR/status.json"
+
+          {
+            echo "## Scheduled Lighthouse audit"
+            echo
+            echo "- **Status:** \`$status\`"
+            echo "- **Mode:** \`$MODE\`"
+            echo "- **URL:** \`$url\`"
+            echo "- **Head SHA:** \`$SHA\`"
+            echo "- **Workflow run:** $RUN_URL"
+            echo "- **Artifact:** \`$ARTIFACT_NAME\`"
+            if [ -n "$ISSUE_URL" ]; then echo "- **New Issue:** $ISSUE_URL"; fi
+            if [ -n "$EXISTING_URL" ]; then echo "- **Existing Issue (duplicate):** $EXISTING_URL"; fi
+            if [ -n "$FINGERPRINT" ]; then echo "- **Fingerprint:** \`$FINGERPRINT\`"; fi
+            if [ "$DEMO" = "true" ]; then echo; echo "> DEMO: использован фиктивный учебный отчёт; это не реальный дефект."; fi
+            if [ "$status" = "NO_DATA" ]; then echo; echo "> NO_DATA: аудит не выполнен, показатели Lighthouse не сфабрикованы."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" = "NO_DATA" ] || [ "$status" = "AGENT_FAILED" ] || [ "$status" = "ISSUE_FAILED" ] || [ "$status" = "FAILED" ]; then
+            echo "::error::Scheduled audit finished with status $status"
+            exit 1
+          fi
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.AUDIT_DIR }}
+          if-no-files-found: warn
+          retention-days: 14

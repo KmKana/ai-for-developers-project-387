@@ -33,10 +33,12 @@ PR из форка не получает job с секретом. Дополни
 проекте не используется. Checkout идёт по `${{ github.event.pull_request.head.sha }}`
 с `persist-credentials: false`.
 
-Если PR меняет сам механизм ревью (workflow, `scripts/opencode-budget.mjs`,
-`opencode*.json`, `REVIEW.md`, `docs/agents/review.md`), автоматическое ревью
-не запускает модель: такой PR получает `review_status: manual_review_required`
-и проверяется человеком. Нельзя проверять механизм его же изменённой версией.
+Если PR меняет сам механизм ревью или CI (`.github/workflows/`,
+`.github/actions/`, бюджетный скрипт, конфигурацию OpenCode, `REVIEW.md`,
+`docs/agents/review.md`, `docs/agents/scheduled-audit.md`,
+`scripts/scheduled-audit/`), автоматическое ревью не запускает модель: такой PR
+получает `review_status: manual_review_required` и проверяется человеком.
+Нельзя проверять механизм его же изменённой версией.
 
 ## Роль ревьюера
 
