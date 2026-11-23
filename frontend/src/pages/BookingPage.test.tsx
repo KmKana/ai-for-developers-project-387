@@ -151,7 +151,7 @@ describe('Страница записи', () => {
     expect(topicField.tagName).toBe('TEXTAREA');
     expect(topicField.hasAttribute('required')).toBe(false);
     expect(topicField.getAttribute('placeholder')).toBe('Кратко опишите, что хотите обсудить');
-    expect(topicField.getAttribute('maxlength')).toBe('300');
+    expect(topicField.hasAttribute('maxlength')).toBe(false);
     expect(screen.getByText(/Не указывайте конфиденциальные данные/)).toBeTruthy();
   });
 });

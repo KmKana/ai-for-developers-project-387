@@ -38,6 +38,9 @@ const booking: Booking = {
   createdAt: '2026-03-10T11:00:00+05:00',
 };
 
+const TOPIC_TOO_LONG = 'Тема разговора не длиннее 300 символов';
+const emoji = (count: number) => '😀'.repeat(count);
+
 function renderBookingPage() {
   return render(
     <MemoryRouter initialEntries={['/book/type-intro']}>
@@ -135,6 +138,88 @@ describe('Подтверждение Записи на Странице запи
         topic: 'Обсудить проект',
       },
     });
+  });
+
+  it('передаёт 160 emoji целиком: длина считается в кодовых точках Unicode', async () => {
+    mockCatalog();
+    const topic = emoji(160);
+    expect(topic.length).toBe(320);
+    expect(Array.from(topic)).toHaveLength(160);
+    vi.mocked(apiCreateBooking).mockResolvedValue(
+      response({ ...booking, topic }, 'http://localhost/api/bookings', 201),
+    );
+
+    renderBookingPage();
+    await chooseSlotAndFillForm(topic);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Встреча забронирована!' }, { timeout: 5000 }),
+    ).toBeTruthy();
+    expect(apiCreateBooking).toHaveBeenCalledWith({
+      body: {
+        meetingTypeId: 'type-intro',
+        start: '2026-03-11T05:00:00Z',
+        guestName: 'Иван Петров',
+        guestEmail: 'ivan@example.com',
+        topic,
+      },
+    });
+    expect(screen.queryByTestId('topic-length-error')).toBeNull();
+  });
+
+  it('принимает ровно 300 emoji', async () => {
+    mockCatalog();
+    const topic = emoji(300);
+    expect(Array.from(topic)).toHaveLength(300);
+    vi.mocked(apiCreateBooking).mockResolvedValue(
+      response({ ...booking, topic }, 'http://localhost/api/bookings', 201),
+    );
+
+    renderBookingPage();
+    await chooseSlotAndFillForm(topic);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Встреча забронирована!' }, { timeout: 5000 }),
+    ).toBeTruthy();
+    expect(apiCreateBooking).toHaveBeenCalledWith({
+      body: {
+        meetingTypeId: 'type-intro',
+        start: '2026-03-11T05:00:00Z',
+        guestName: 'Иван Петров',
+        guestEmail: 'ivan@example.com',
+        topic,
+      },
+    });
+    expect(screen.queryByTestId('topic-length-error')).toBeNull();
+  });
+
+  it('показывает ошибку для 301 emoji и не отправляет запрос', async () => {
+    mockCatalog();
+    const topic = emoji(301);
+    expect(Array.from(topic)).toHaveLength(301);
+
+    renderBookingPage();
+    await chooseSlotAndFillForm(topic);
+
+    const error = await screen.findByTestId('topic-length-error');
+    expect(error.textContent).toBe(TOPIC_TOO_LONG);
+    expect(apiCreateBooking).not.toHaveBeenCalled();
+    expect((screen.getByTestId('guest-topic') as HTMLTextAreaElement).value).toBe(topic);
+    expect(screen.queryByRole('heading', { name: 'Встреча забронирована!' })).toBeNull();
+  });
+
+  it('не обрезает вставленный текст длиннее лимита и не отправляет его', async () => {
+    mockCatalog();
+    const pasted = 'я'.repeat(301);
+
+    renderBookingPage();
+    await chooseSlotAndFillForm(pasted);
+
+    const error = await screen.findByTestId('topic-length-error');
+    expect(error.textContent).toBe(TOPIC_TOO_LONG);
+    expect((screen.getByTestId('guest-topic') as HTMLTextAreaElement).value).toBe(pasted);
+    expect(apiCreateBooking).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'Встреча забронирована!' })).toBeNull();
   });
 
   it('не показывает блок темы, если тема не указана', async () => {

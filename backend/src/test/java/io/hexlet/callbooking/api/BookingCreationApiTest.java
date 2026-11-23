@@ -352,6 +352,74 @@ class BookingCreationApiTest {
         .andExpect(jsonPath("$.topic").value(topic));
   }
 
+  @Test
+  void topicOf301EmojiIsRejected() throws Exception {
+    String typeId = createType("Знакомство", 30);
+    ObjectNode body = booking(typeId, START, "Гость", "guest@example.com");
+    body.put("topic", "😀".repeat(301));
+
+    mvc.perform(post("/api/bookings").contentType(APPLICATION_JSON).content(body.toString()))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"))
+        .andExpect(jsonPath("$.message").value("Тема разговора не длиннее 300 символов"));
+
+    expectNoBookings();
+  }
+
+  @Test
+  void unicodeWhitespaceAtTopicEdgesIsTrimmed() throws Exception {
+    String typeId = createType("Знакомство", 30);
+    String[] starts = {"2026-03-11T05:00:00Z", "2026-03-11T06:00:00Z", "2026-03-11T07:00:00Z"};
+    String[] topics = {
+      "\u00A0Обсудить проект\u00A0", "\u2003Обсудить проект\u2003", "\uFEFFОбсудить проект\uFEFF"
+    };
+
+    for (int i = 0; i < topics.length; i++) {
+      ObjectNode body = booking(typeId, starts[i], "Гость", "guest@example.com");
+      body.put("topic", topics[i]);
+
+      mvc.perform(post("/api/bookings").contentType(APPLICATION_JSON).content(body.toString()))
+          .andExpect(status().isCreated())
+          .andExpect(jsonPath("$.topic").value("Обсудить проект"));
+    }
+  }
+
+  @Test
+  void unicodeWhitespaceOnlyTopicIsAbsent() throws Exception {
+    String typeId = createType("Знакомство", 30);
+    String[] starts = {"2026-03-11T05:00:00Z", "2026-03-11T06:00:00Z", "2026-03-11T07:00:00Z"};
+    String[] blankTopics = {"\u00A0", "\u2003", "\uFEFF"};
+
+    for (int i = 0; i < blankTopics.length; i++) {
+      ObjectNode body = booking(typeId, starts[i], "Гость", "guest@example.com");
+      body.put("topic", blankTopics[i]);
+
+      String response =
+          mvc.perform(post("/api/bookings").contentType(APPLICATION_JSON).content(body.toString()))
+              .andExpect(status().isCreated())
+              .andReturn()
+              .getResponse()
+              .getContentAsString();
+
+      var created = om.readTree(response);
+      assertThat(created.has("topic")).isFalse();
+      assertThat(created.size()).isEqualTo(8);
+    }
+  }
+
+  @Test
+  void calendarErrorWinsOverLongTopic() throws Exception {
+    String typeId = createType("Знакомство", 30);
+    ObjectNode body = booking(typeId, "2026-03-11T04:10:00Z", "Гость", "guest@example.com");
+    body.put("topic", "я".repeat(301));
+
+    mvc.perform(post("/api/bookings").contentType(APPLICATION_JSON).content(body.toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("OFF_GRID"));
+
+    expectNoBookings();
+  }
+
   private void expectNoBookings() throws Exception {
     mvc.perform(get("/api/bookings")).andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
   }

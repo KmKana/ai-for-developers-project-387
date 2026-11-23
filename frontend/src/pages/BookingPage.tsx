@@ -14,6 +14,13 @@ import {
   slotDurationMinutes,
 } from '../util/format';
 
+/** Лимит темы в кодовых точках Unicode — та же единица, что у maxLength в контракте. */
+const TOPIC_MAX_CODE_POINTS = 300;
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
 /** Страница записи: календарь на 14 дней, слоты и форма гостя. */
 export default function BookingPage() {
   const { id } = useParams<{ id: string }>();
@@ -32,6 +39,11 @@ export default function BookingPage() {
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
   const [booked, setBooked] = useState<Booking | null>(null);
+
+  // Та же нормализация, что на сервере: пробелы по краям не входят в лимит.
+  // Array.from считает кодовые точки Unicode, а не UTF-16 code units.
+  const trimmedTopic = topic.trim();
+  const topicTooLong = codePointLength(trimmedTopic) > TOPIC_MAX_CODE_POINTS;
 
   const load = useCallback(async () => {
     if (!id) {
@@ -80,13 +92,12 @@ export default function BookingPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!id || !selectedSlot) {
+    if (!id || !selectedSlot || topicTooLong) {
       return;
     }
     setSubmitting(true);
     setConflict(null);
     try {
-      const trimmedTopic = topic.trim();
       const booking = await createBooking({
         meetingTypeId: id,
         start: selectedSlot.start,
@@ -276,10 +287,21 @@ export default function BookingPage() {
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="Кратко опишите, что хотите обсудить"
-              maxLength={300}
+              aria-invalid={topicTooLong}
+              aria-describedby={topicTooLong ? 'topic-length-error' : undefined}
               rows={3}
             />
           </label>
+          {topicTooLong && (
+            <p
+              id="topic-length-error"
+              className="banner banner-error"
+              data-testid="topic-length-error"
+              role="alert"
+            >
+              Тема разговора не длиннее 300 символов
+            </p>
+          )}
           <p className="muted small">
             Не указывайте конфиденциальные данные: тема и контакты видны всем, кто знает адрес
             сервиса.
@@ -288,7 +310,7 @@ export default function BookingPage() {
             className="btn"
             type="submit"
             data-testid="submit-booking"
-            disabled={!selectedSlot || submitting}
+            disabled={!selectedSlot || submitting || topicTooLong}
           >
             {selectedSlot
               ? `Подтвердить запись на ${formatDateTime(selectedSlot.start)}`

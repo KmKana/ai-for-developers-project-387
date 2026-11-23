@@ -33,7 +33,7 @@ test('гость записывается на слот, конфликт из �
   const typeName = `E2E встреча ${suffix}`;
   const guestName = `Гость ${suffix}`;
   const guestEmail = `guest-${suffix}@example.com`;
-  const topic = `Обсудить проект ${suffix}`;
+  const topic = `Обсудить проект ${suffix} ${'😀'.repeat(160)}`;
   const staleGuestName = `Гость со старой страницы ${suffix}`;
   const staleGuestEmail = `stale-${suffix}@example.com`;
 
@@ -72,7 +72,9 @@ test('гость записывается на слот, конфликт из �
   await expect(page.getByTestId('submit-booking')).toBeEnabled();
   await page.getByTestId('guest-name').fill(guestName);
   await page.getByTestId('guest-email').fill(guestEmail);
-  await page.getByTestId('guest-topic').fill(topic);
+  const topicField = page.getByTestId('guest-topic');
+  await topicField.pressSequentially(topic);
+  await expect(topicField).toHaveValue(topic);
   await page.getByTestId('submit-booking').click();
 
   const confirmation = page.getByTestId('booking-success');

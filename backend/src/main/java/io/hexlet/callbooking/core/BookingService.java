@@ -56,7 +56,6 @@ public class BookingService {
     if (guestEmail.isEmpty() || !EMAIL.matcher(guestEmail).matches()) {
       throw new ApiRequestException(400, ApiErrorCode.VALIDATION_ERROR, "Некорректный email гостя");
     }
-    String topic = normalizeTopic(input.topic());
 
     Instant startInstant = input.start().toInstant();
     long durationMinutes = type.durationMinutes();
@@ -86,6 +85,10 @@ public class BookingService {
       throw new ApiRequestException(409, ApiErrorCode.OFF_GRID);
     }
 
+    // Тема проверяется после календарных правил: запрос с некорректным Слотом
+    // по-прежнему получает 409 (например, OFF_GRID), а не 400 из-за длины темы.
+    String topic = normalizeTopic(input.topic());
+
     // Единственная проверка доступности выполняется под монитором хранилища вместе с созданием
     // Записи: гонка между проверкой и добавлением исключена.
     var result =
@@ -100,12 +103,14 @@ public class BookingService {
   /**
    * Тема необязательна: пробелы по краям обрезаются, пустая строка равнозначна отсутствию темы.
    * Длина проверяется после обрезки в кодовых точках Unicode, как {@code maxLength} в контракте.
+   * Обрезка учитывает Unicode-пробелы, которые {@link String#trim()} не покрывает (NBSP, U+2003,
+   * U+FEFF): иначе тема из одних таких символов считалась бы непустой.
    */
   private static String normalizeTopic(String topic) {
     if (topic == null) {
       return null;
     }
-    String trimmed = topic.trim();
+    String trimmed = trimTopicEdges(topic);
     if (trimmed.isEmpty()) {
       return null;
     }
@@ -113,6 +118,37 @@ public class BookingService {
       throw new ApiRequestException(400, ApiErrorCode.VALIDATION_ERROR, TOPIC_TOO_LONG_MESSAGE);
     }
     return trimmed;
+  }
+
+  /** Обрезает Unicode-пробелы по краям, не разрезая суррогатные пары. */
+  private static String trimTopicEdges(String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end) {
+      int codePoint = value.codePointAt(start);
+      if (!isTopicWhitespace(codePoint)) {
+        break;
+      }
+      start += Character.charCount(codePoint);
+    }
+    while (end > start) {
+      int codePoint = value.codePointBefore(end);
+      if (!isTopicWhitespace(codePoint)) {
+        break;
+      }
+      end -= Character.charCount(codePoint);
+    }
+    return value.substring(start, end);
+  }
+
+  /**
+   * Пробелы, которые JavaScript {@code trim()} и Unicode считают краями строки. {@link
+   * String#strip()} не покрывает NBSP и U+FEFF, поэтому проверяем явно.
+   */
+  private static boolean isTopicWhitespace(int codePoint) {
+    return Character.isWhitespace(codePoint)
+        || Character.isSpaceChar(codePoint)
+        || codePoint == 0xFEFF;
   }
 
   private static ApiRequestException slotConflict() {
