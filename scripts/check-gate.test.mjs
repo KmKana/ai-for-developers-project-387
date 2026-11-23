@@ -26,6 +26,7 @@ const directGates = [
   "test-check-gate",
   "test-release-please",
   "test-opencode-budget",
+  "test-opencode-concurrency",
 ];
 const lintGates = ["lint-backend", "lint-frontend"];
 
@@ -101,6 +102,7 @@ test("mise check is the single gate with every required check", () => {
     "test-check-gate": /check-gate\.test\.mjs/,
     "test-release-please": /release-please\.test\.mjs/,
     "test-opencode-budget": /opencode-budget\.test\.mjs/,
+    "test-opencode-concurrency": /opencode-concurrency\.test\.mjs/,
   };
   for (const [name, pattern] of Object.entries(commands)) {
     assert.match(tasks[name]?.run ?? "", pattern, `задача ${name}: неверная команда`);
