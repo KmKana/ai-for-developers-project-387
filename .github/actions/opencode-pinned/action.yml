@@ -43,6 +43,11 @@ inputs:
     description: "Inline OpenCode config, e.g. the read-only override"
     required: false
 
+  gh_token:
+    description: "Token exposed to the agent as GH_TOKEN for GitHub CLI (write jobs only)"
+    required: false
+    default: ""
+
 runs:
   using: "composite"
   steps:
@@ -74,3 +79,4 @@ runs:
         VARIANT: ${{ inputs.variant }}
         OIDC_BASE_URL: ${{ inputs.oidc_base_url }}
         OPENCODE_CONFIG_CONTENT: ${{ inputs.config_content }}
+        GH_TOKEN: ${{ inputs.gh_token }}
