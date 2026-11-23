@@ -1,0 +1,25 @@
+Демонстрация limit_exhausted без вызова модели
+================================================
+
+Команда 1: решение той же функции decideInteractive, которую использует workflow.
+
+used=1 allowed=true reason=ok
+used=2 allowed=true reason=ok
+used=3 allowed=true reason=ok
+used=4 allowed=false reason=limit_exhausted
+
+Команда 2: целевой unit-тест счётчика.
+
+$ node --test --test-name-pattern "blocks the fourth call" scripts/opencode-budget.test.mjs
+✔ interactive budget blocks the fourth call and counts reruns (2.9052ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 208.8572
+
+Вывод: четвёртый вызов не получает allowed=true; workflow не запускает модель
+и публикует budget_status: limit_exhausted. Платные вызовы модели не выполнялись.
