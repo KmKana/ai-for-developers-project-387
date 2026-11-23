@@ -89,6 +89,27 @@ cd api/tsp && npm run generate              # TypeSpec -> OpenAPI
 cd ../../frontend && npm run generate-sdk   # OpenAPI -> SDK
 ```
 
+## OpenCode в GitHub Actions
+
+Workflow `.github/workflows/opencode.yml` подключает официальное [действие OpenCode для GitHub](https://github.com/anomalyco/opencode/blob/latest/github/README.md). Он срабатывает только на события `issue_comment` и `pull_request_review_comment` типа `created`, когда комментарий содержит `/oc` или `/opencode` и оставлен пользователем `KmKana`; комментарии ботов игнорируются. Используется авторизация через GitHub App (`id-token: write`, `contents: read`), checkout выполняется с `persist-credentials: false`. `pull_request_target` не применяется, а для PR из форка шаг с секретом пропускается.
+
+Модель — `opencode/deepseek-v4.1-flash-free`: бесплатная модель из каталога OpenCode с поддержкой инструментов и рассуждений. Ключ берётся только из секрета репозитория `OPENCODE_API_KEY` и не выводится в логи. Запуск ограничен 15 минутами, для каждого Issue/PR одновременно выполняется не более одного запуска (`concurrency` по номеру). Параметры действия: `mentions: /opencode,/oc` и `share: false`.
+
+Навыки `to-spec`, `to-tickets` и `implement-spec` хранятся в репозитории в `.agents/skills/` и автоматически обнаруживаются OpenCode на чистом runner; отдельный шаг workflow проверяет наличие их `SKILL.md` после checkout. Дополнительная установка навыков не требуется.
+
+После объединения PR в `main` проверку можно выполнить так:
+
+1. Откройте любую Issue в этом репозитории.
+2. От аккаунта `KmKana` оставьте комментарий:
+
+   ```text
+   /oc explain this issue
+   ```
+
+3. В разделе **Actions** появится запуск `opencode`; бот сначала напишет «Working...», затем заменит комментарий ответом. Ожидаемое время — не более 15 минут.
+
+Если секрет `OPENCODE_API_KEY` не задан в **Settings → Secrets and variables → Actions**, добавьте его там перед проверкой: workflow не может работать без ключа и никогда не печатает его значение.
+
 ## Запуск через Docker
 
 `Dockerfile` собирает один образ: Vite собирает статику, Maven пакует её вместе со Spring Boot, финальный слой содержит только JRE и `app.jar`. UI и `/api` отдаются с одного origin.
