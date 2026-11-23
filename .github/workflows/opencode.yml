@@ -106,7 +106,7 @@ jobs:
       # падает сразу, а не после таймаута на ошибке провайдера.
       - name: Verify OPENCODE_API_KEY is configured
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
         run: |
           if [ -z "$OPENCODE_API_KEY" ]; then
             echo "::error::Repository secret OPENCODE_API_KEY is not configured. Add a key from the OpenCode Console workspace with a positive balance."
@@ -117,7 +117,7 @@ jobs:
       - name: Run OpenCode
         uses: ./.github/actions/opencode-pinned
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
         with:
           model: opencode/deepseek-v4.1-flash
           mentions: /opencode,/oc
@@ -179,7 +179,7 @@ jobs:
 
       - name: Verify OPENCODE_API_KEY is configured
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
         run: |
           if [ -z "$OPENCODE_API_KEY" ]; then
             echo "::error::Repository secret OPENCODE_API_KEY is not configured. Add a key from the OpenCode Console workspace with a positive balance."
@@ -189,7 +189,7 @@ jobs:
       - name: Run OpenCode
         uses: ./.github/actions/opencode-pinned
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
           GH_TOKEN: ${{ github.token }}
         with:
           model: opencode/deepseek-v4.1-flash
