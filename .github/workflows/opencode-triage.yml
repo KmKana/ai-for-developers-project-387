@@ -1,0 +1,155 @@
+name: opencode triage
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: read
+  id-token: write
+
+# Один triage-запуск на Issue; повторные события того же Issue не конкурируют.
+concurrency:
+  group: opencode-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # Только новые Issues от доверенного пользователя. Боты (включая Issues,
+    # созданные скиллами to-spec/to-tickets через GitHub Actions) отсекаются здесь же.
+    if: >-
+      github.event.issue.user.login == 'KmKana' &&
+      github.event.issue.user.type != 'Bot' &&
+      github.event.issue.pull_request == null
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+      id-token: write
+    steps:
+      # Метки могут появиться уже после события opened, поэтому прочитаем Issue
+      # заново и коротко подождём. Initial payload как источник истины не используем.
+      - name: Check current issue state
+        id: guard
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issue = context.payload.issue
+            const title = issue.title || ''
+            const body = issue.body || ''
+
+            // Дополнительная страховка от Issues, созданных to-spec/to-tickets.
+            const skillCreated =
+              /^Спецификация:/i.test(title) ||
+              /(?:^|\n)\s*(?:>\s*)?Part of #\d+/i.test(body) ||
+              /(?:^|\n)##\s*(?:Что сделать|What to build)/i.test(body)
+
+            // Статусы из docs/agents/triage-labels.md, при которых triage уже не нужен.
+            const triagedLabels = ['ready-for-agent', 'ready-for-human', 'wontfix']
+            let labels = []
+            for (let attempt = 0; attempt < 6; attempt++) {
+              const { data: current } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+              })
+              labels = (current.labels || []).map((label) =>
+                typeof label === 'string' ? label : label.name,
+              )
+              if (labels.some((label) => triagedLabels.includes(label))) break
+              if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 2000))
+            }
+
+            const alreadyTriaged = labels.some((label) => triagedLabels.includes(label))
+            const shouldTriage = !skillCreated && !alreadyTriaged
+            core.setOutput('triage', shouldTriage ? 'true' : 'false')
+            core.info(
+              shouldTriage
+                ? `Issue #${issue.number} scheduled for triage`
+                : `Issue #${issue.number} skipped: skill-created or already triaged`,
+            )
+
+      - name: Check out repository
+        if: steps.guard.outputs.triage == 'true'
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # OpenCode находит .agents/skills автоматически (project compatibility path).
+      - name: Verify OpenCode configuration and skills
+        if: steps.guard.outputs.triage == 'true'
+        run: |
+          test -f opencode.json
+          test -f opencode.readonly.json
+          test -f docs/agents/opencode-github.md
+          test -f docs/agents/triage-labels.md
+          node -e "const fs=require('fs');for(const file of ['opencode.json','opencode.readonly.json']){const c=JSON.parse(fs.readFileSync(file,'utf8'));if(c['\$schema']!=='https://opencode.ai/config.json')throw new Error(file+' is missing \$schema');for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}}const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));const a=c.agent&&c.agent.readonly;if(!a||a.mode!=='primary'||!a.permission||a.permission.edit!=='deny'||a.permission.bash!=='deny'||a.permission.task!=='deny')throw new Error('read-only agent is not configured')"
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.readonly.json','utf8'));if(c.default_agent!=='readonly')throw new Error('read-only config must use default_agent: readonly');for(const p of ['edit','bash','task','webfetch','websearch','todowrite','lsp','question'])if(c.permission[p]!=='deny')throw new Error('missing read-only deny for '+p);if(JSON.stringify(c.permission.external_directory)!=='{\"*\":\"deny\"}')throw new Error('external_directory must be denied');if(JSON.stringify(c.permission.skill)!=='{\"*\":\"deny\"}')throw new Error('skills must be denied')"
+          test -f .agents/skills/triage/SKILL.md
+          echo "OpenCode config, instructions and triage skill are available"
+
+      - name: Build read-only inline config
+        id: readonly_config
+        if: steps.guard.outputs.triage == 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs')
+            const config = JSON.parse(fs.readFileSync('opencode.readonly.json', 'utf8'))
+            if (config.default_agent !== 'readonly') throw new Error('default_agent must be readonly')
+            core.setOutput('config', JSON.stringify(config))
+
+      - name: Verify clean worktree before OpenCode
+        if: steps.guard.outputs.triage == 'true'
+        run: |
+          test -z "$(git status --porcelain)"
+
+      # Авторизация через GitHub App/OIDC. GH_TOKEN не передаётся: triage остаётся read-only.
+      - name: Run OpenCode triage
+        if: steps.guard.outputs.triage == 'true'
+        uses: ./.github/actions/opencode-pinned
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4.1-flash-free
+          mentions: /opencode,/oc
+          share: false
+          config_content: ${{ steps.readonly_config.outputs.config }}
+          prompt: |
+            Выполни автоматический triage нового обращения GitHub Issue #${{ github.event.issue.number }}.
+
+            Прочитай:
+            - заголовок и тело этого Issue (они уже переданы в контексте);
+            - AGENTS.md и docs/agents/ (issue-tracker, triage-labels, domain, opencode-github);
+            - GLOSSARY.md и docs/adr/, если они есть;
+            - текущее состояние приложения в checkout (README.md, api/tsp/main.tsp, backend/, frontend/), чтобы понять, что уже реализовано.
+
+            Затем:
+            1. Сформулируй потребность пользователя своими словами.
+            2. Проверь, нет ли уже реализованного поведения или существующих Issues, которые закрывают эту потребность; укажи, где именно искал.
+            3. Предложи категорию и состояние по правилам docs/agents/triage-labels.md: категорию `bug` или `enhancement` и одно из состояний `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. Обоснуй выбор.
+            4. Если данных не хватает, задай конкретные адресные уточняющие вопросы автору Issue. Не задавай общих вопросов вроде «нужна ли информация».
+            5. Предложи следующий шаг для мейнтейнера: какую метку применить и когда стоит вручную запустить to-spec.
+
+            Ограничения:
+            - Ответь одним комментарием на русском языке; он будет опубликован в Issue автоматически.
+            - Начни комментарий со строки `> *This was generated by AI during triage.*`, как требует навык triage.
+            - Не вызывай и не запускай навыки to-spec, to-tickets и implement-spec.
+            - Не меняй файлы, не создавай ветки, коммиты, Pull Request, Issue и метки.
+            - Не используй gh и сеть: опирайся только на контекст Issue и файлы checkout.
+            - Не приводи значения токенов и секретов.
+
+      # Экшн коммитит грязное дерево и открывает PR. Для read-only это недопустимо.
+      - name: Verify read-only run left the worktree clean
+        if: steps.guard.outputs.triage == 'true'
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "OpenCode changed files during read-only triage"
+            git status --short
+            git reset --hard HEAD
+            git clean -fd
+            exit 1
+          fi
