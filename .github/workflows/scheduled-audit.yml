@@ -234,8 +234,12 @@ jobs:
         run: |
           set +e
           status="AGENT_FAILED"
+          api_key="${OPENCODE_API_KEY:-}"
+          # Установщик не должен видеть ключ модели: он запускается после unset,
+          # а ключ передаётся только процессу opencode run.
+          unset OPENCODE_API_KEY
 
-          if [ -z "$OPENCODE_API_KEY" ]; then
+          if [ -z "$api_key" ]; then
             echo "OPENCODE_API_KEY/SECRETPAY is not configured" > "$AUDIT_DIR/agent-error.txt"
           elif [ ! -f opencode.audit.json ]; then
             echo "opencode.audit.json is missing" > "$AUDIT_DIR/agent-error.txt"
@@ -286,7 +290,7 @@ jobs:
           PROMPT
 
               export OPENCODE_CONFIG_CONTENT="$(cat opencode.audit.json)"
-              timeout --signal=TERM --kill-after=20s 300 \
+              OPENCODE_API_KEY="$api_key" timeout --signal=TERM --kill-after=20s 300 \
                 "$HOME/.opencode/bin/opencode" run \
                   --model opencode/deepseek-v4.1-flash \
                   --agent auditor \
@@ -362,13 +366,15 @@ jobs:
         run: |
           labels=(--label enhancement)
           set +e
-          issue_url="$(gh issue create \
+          gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "$(cat "$AUDIT_DIR/issue/issue-title.txt")" \
             --body-file "$AUDIT_DIR/issue/issue-body.md" \
-            "${labels[@]}" 2> "$AUDIT_DIR/issue-create.log" | tail -n 1)"
+            "${labels[@]}" \
+            > "$AUDIT_DIR/issue-create.out" 2> "$AUDIT_DIR/issue-create.log"
           code=$?
           set -e
+          issue_url="$(tail -n 1 "$AUDIT_DIR/issue-create.out")"
           if [ "$code" -ne 0 ] || [ -z "$issue_url" ]; then
             echo "status=ISSUE_FAILED" >> "$GITHUB_OUTPUT"
             echo "::error::Не удалось создать GitHub Issue"

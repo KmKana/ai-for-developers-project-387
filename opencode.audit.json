@@ -53,6 +53,6 @@
     }
   },
   "experimental": {
-    "continue_loop_on_deny": true
+    "continue_loop_on_deny": false
   }
 }
