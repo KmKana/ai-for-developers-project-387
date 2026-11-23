@@ -34,23 +34,31 @@ jobs:
       - name: Verify OpenCode configuration and skills
         run: |
           test -f opencode.json
+          test -f opencode.readonly.json
           test -f docs/agents/opencode-github.md
-          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}const a=c.agent&&c.agent.readonly;if(!a||a.mode!=='primary'||!a.permission||a.permission.edit!=='deny'||a.permission.bash!=='deny'||a.permission.task!=='deny')throw new Error('read-only agent is not configured')"
+          node -e "const fs=require('fs');for(const file of ['opencode.json','opencode.readonly.json']){const c=JSON.parse(fs.readFileSync(file,'utf8'));if(c['\$schema']!=='https://opencode.ai/config.json')throw new Error(file+' is missing \$schema');for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}}const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));const a=c.agent&&c.agent.readonly;if(!a||a.mode!=='primary'||!a.permission||a.permission.edit!=='deny'||a.permission.bash!=='deny'||a.permission.task!=='deny')throw new Error('read-only agent is not configured')"
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.readonly.json','utf8'));if(c.default_agent!=='readonly')throw new Error('read-only config must use default_agent: readonly');for(const p of ['edit','bash','task','webfetch','websearch','todowrite','lsp','question'])if(c.permission[p]!=='deny')throw new Error('missing read-only deny for '+p);if(JSON.stringify(c.permission.external_directory)!=='{\"*\":\"deny\"}')throw new Error('external_directory must be denied')"
           test -f .agents/skills/to-spec/SKILL.md
           test -f .agents/skills/to-tickets/SKILL.md
           test -f .agents/skills/implement-spec/SKILL.md
           echo "OpenCode config, instructions and agent skills are available"
 
-      # read-only для объяснений, triage и анализа требований; write-навыки — только по явному запросу.
-      - name: Choose OpenCode agent
-        id: agent_mode
+      # Для объяснений, triage и анализа включаем inline-конфиг с default_agent: readonly.
+      # Write-навыки остаются на агенте build из основного opencode.json.
+      - name: Choose OpenCode access mode
+        id: access_mode
         uses: actions/github-script@v9
         with:
           script: |
+            const fs = require('fs')
             const body = context.payload.comment.body.toLowerCase()
             const writeIntent = /(?:^|[\s.,])(?:запусти|запустить|выполни|выполнить|используй|использовать|вызови|вызвать|примени|переходи|перейди|run|use|apply|execute)\s+(?:скилл\s+)?(?:to-spec|to-tickets|implement-spec)\b|\/(?:oc|opencode)\s+(?:to-spec|to-tickets|implement-spec)\b|\/(?:to-spec|to-tickets|implement-spec)\b/i.test(body)
-            core.setOutput('name', writeIntent ? 'build' : 'readonly')
             core.setOutput('write', writeIntent ? 'true' : 'false')
+            if (!writeIntent) {
+              const config = JSON.parse(fs.readFileSync('opencode.readonly.json', 'utf8'))
+              if (config.default_agent !== 'readonly') throw new Error('default_agent must be readonly')
+              core.setOutput('config', JSON.stringify(config))
+            }
 
       - name: Verify clean worktree before OpenCode
         run: |
@@ -75,20 +83,22 @@ jobs:
               core.info(`PR #${number} head is in ${pr.head.repo.full_name}; skipping the step that uses secrets.`);
             }
 
+      # Локальная копия экшна с anomalyco/opencode/github@77fc88c8ade8e5a620ebbe1197f3a572d29ae91a
+      # и явно закреплённой версией CLI 1.19.6 (без кэша по "latest").
       - name: Run OpenCode
         if: steps.pr_source.outputs.trusted != 'false'
-        uses: anomalyco/opencode/github@latest
+        uses: ./.github/actions/opencode-pinned
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/deepseek-v4.1-flash-free
-          agent: ${{ steps.agent_mode.outputs.name }}
           mentions: /opencode,/oc
           share: false
+          config_content: ${{ steps.access_mode.outputs.config }}
 
       # Экшн сам коммитит грязное дерево и открывает PR. Для read-only это недопустимо.
       - name: Verify read-only run left the worktree clean
-        if: steps.agent_mode.outputs.write != 'true' && steps.pr_source.outputs.trusted != 'false'
+        if: steps.access_mode.outputs.write != 'true' && steps.pr_source.outputs.trusted != 'false'
         run: |
           if [ -n "$(git status --porcelain)" ]; then
             echo "OpenCode changed files in read-only mode"

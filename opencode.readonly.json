@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "readonly",
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": {
+      "*": "deny"
+    },
+    "question": "deny",
+    "todowrite": "deny",
+    "skill": {
+      "*": "deny"
+    },
+    "lsp": "deny"
+  },
+  "agent": {
+    "readonly": {
+      "mode": "primary",
+      "description": "Read-only agent for explanations, triage and requirement analysis.",
+      "prompt": "You are in read-only mode. Do not change files, run shell commands that write, create branches, commits or pull requests. Answer only with the requested text.",
+      "steps": 20,
+      "permission": {
+        "*": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": {
+          "*": "deny"
+        },
+        "question": "deny",
+        "todowrite": "deny",
+        "skill": {
+          "*": "deny"
+        },
+        "lsp": "deny"
+      }
+    }
+  },
+  "experimental": {
+    "continue_loop_on_deny": true
+  }
+}
