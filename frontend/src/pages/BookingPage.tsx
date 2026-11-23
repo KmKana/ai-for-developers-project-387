@@ -28,6 +28,7 @@ export default function BookingPage() {
 
   const [guestName, setGuestName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
+  const [topic, setTopic] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
   const [booked, setBooked] = useState<Booking | null>(null);
@@ -85,11 +86,13 @@ export default function BookingPage() {
     setSubmitting(true);
     setConflict(null);
     try {
+      const trimmedTopic = topic.trim();
       const booking = await createBooking({
         meetingTypeId: id,
         start: selectedSlot.start,
         guestName,
         guestEmail,
+        ...(trimmedTopic ? { topic: trimmedTopic } : {}),
       });
       setBooked(booking);
     } catch (e) {
@@ -128,6 +131,12 @@ export default function BookingPage() {
                 {booked.guestName} · {booked.guestEmail}
               </dd>
             </div>
+            {booked.topic && (
+              <div>
+                <dt>Тема разговора</dt>
+                <dd className="booking-topic">{booked.topic}</dd>
+              </div>
+            )}
           </dl>
           <Link className="btn btn-secondary" to="/catalog">
             Записаться ещё раз
@@ -260,6 +269,21 @@ export default function BookingPage() {
               required
             />
           </label>
+          <label>
+            Тема разговора (необязательно)
+            <textarea
+              data-testid="guest-topic"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="Кратко опишите, что хотите обсудить"
+              maxLength={300}
+              rows={3}
+            />
+          </label>
+          <p className="muted small">
+            Не указывайте конфиденциальные данные: тема и контакты видны всем, кто знает адрес
+            сервиса.
+          </p>
           <button
             className="btn"
             type="submit"

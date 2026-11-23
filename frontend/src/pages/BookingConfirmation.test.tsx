@@ -48,7 +48,7 @@ function renderBookingPage() {
   );
 }
 
-async function chooseSlotAndFillForm() {
+async function chooseSlotAndFillForm(topic?: string) {
   fireEvent.click(await screen.findByRole('button', { name: '10:00 · 30 мин' }, { timeout: 5000 }));
   fireEvent.change(screen.getByPlaceholderText('Как вас зовут?'), {
     target: { value: 'Иван Петров' },
@@ -56,6 +56,9 @@ async function chooseSlotAndFillForm() {
   fireEvent.change(screen.getByPlaceholderText('you@example.com'), {
     target: { value: 'ivan@example.com' },
   });
+  if (topic !== undefined) {
+    fireEvent.change(screen.getByTestId('guest-topic'), { target: { value: topic } });
+  }
   fireEvent.click(screen.getByRole('button', { name: /Подтвердить запись/ }));
 }
 
@@ -106,6 +109,47 @@ describe('Подтверждение Записи на Странице запи
         guestEmail: 'ivan@example.com',
       },
     });
+  });
+
+  it('передаёт тему в создание Записи и показывает её на подтверждении', async () => {
+    mockCatalog();
+    const bookedWithTopic: Booking = { ...booking, topic: 'Обсудить проект' };
+    vi.mocked(apiCreateBooking).mockResolvedValue(
+      response(bookedWithTopic, 'http://localhost/api/bookings', 201),
+    );
+
+    renderBookingPage();
+    await chooseSlotAndFillForm('  Обсудить проект  ');
+
+    expect(
+      await screen.findByRole('heading', { name: 'Встреча забронирована!' }, { timeout: 5000 }),
+    ).toBeTruthy();
+    expect(screen.getByText('Тема разговора')).toBeTruthy();
+    expect(screen.getByText('Обсудить проект')).toBeTruthy();
+    expect(apiCreateBooking).toHaveBeenCalledWith({
+      body: {
+        meetingTypeId: 'type-intro',
+        start: '2026-03-11T05:00:00Z',
+        guestName: 'Иван Петров',
+        guestEmail: 'ivan@example.com',
+        topic: 'Обсудить проект',
+      },
+    });
+  });
+
+  it('не показывает блок темы, если тема не указана', async () => {
+    mockCatalog();
+    vi.mocked(apiCreateBooking).mockResolvedValue(
+      response(booking, 'http://localhost/api/bookings', 201),
+    );
+
+    renderBookingPage();
+    await chooseSlotAndFillForm();
+
+    expect(
+      await screen.findByRole('heading', { name: 'Встреча забронирована!' }, { timeout: 5000 }),
+    ).toBeTruthy();
+    expect(screen.queryByText('Тема разговора')).toBeNull();
   });
 
   it('показывает сообщение сервера при ошибке валидации', async () => {

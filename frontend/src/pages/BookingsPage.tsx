@@ -96,6 +96,7 @@ export default function BookingsPage() {
               <span className="chip">{booking.meetingTypeName}</span>
               <strong>{booking.guestName}</strong>
               <span className="muted small">{booking.guestEmail}</span>
+              {booking.topic && <span className="muted small booking-topic">{booking.topic}</span>}
             </div>
           </article>
         ))}

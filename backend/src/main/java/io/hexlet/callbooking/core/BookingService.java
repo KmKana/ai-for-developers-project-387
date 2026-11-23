@@ -20,6 +20,11 @@ public class BookingService {
 
   private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
+  /** Лимит темы в кодовых точках Unicode — та же единица, что у maxLength в OpenAPI. */
+  private static final int TOPIC_MAX_CODE_POINTS = 300;
+
+  private static final String TOPIC_TOO_LONG_MESSAGE = "Тема разговора не длиннее 300 символов";
+
   private final InMemoryStore store;
   private final BookingRules rules;
 
@@ -51,6 +56,7 @@ public class BookingService {
     if (guestEmail.isEmpty() || !EMAIL.matcher(guestEmail).matches()) {
       throw new ApiRequestException(400, ApiErrorCode.VALIDATION_ERROR, "Некорректный email гостя");
     }
+    String topic = normalizeTopic(input.topic());
 
     Instant startInstant = input.start().toInstant();
     long durationMinutes = type.durationMinutes();
@@ -84,11 +90,29 @@ public class BookingService {
     // Записи: гонка между проверкой и добавлением исключена.
     var result =
         store.tryAddBooking(
-            type.id(), type.name(), startInstant, endInstant, guestName, guestEmail);
+            type.id(), type.name(), startInstant, endInstant, guestName, guestEmail, topic);
     if (result.conflict() != null) {
       throw slotConflict();
     }
     return toDto(result.created());
+  }
+
+  /**
+   * Тема необязательна: пробелы по краям обрезаются, пустая строка равнозначна отсутствию темы.
+   * Длина проверяется после обрезки в кодовых точках Unicode, как {@code maxLength} в контракте.
+   */
+  private static String normalizeTopic(String topic) {
+    if (topic == null) {
+      return null;
+    }
+    String trimmed = topic.trim();
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if (trimmed.codePointCount(0, trimmed.length()) > TOPIC_MAX_CODE_POINTS) {
+      throw new ApiRequestException(400, ApiErrorCode.VALIDATION_ERROR, TOPIC_TOO_LONG_MESSAGE);
+    }
+    return trimmed;
   }
 
   private static ApiRequestException slotConflict() {
@@ -108,6 +132,7 @@ public class BookingService {
         OffsetDateTime.ofInstant(booking.end(), BookingRules.ZONE),
         booking.guestName(),
         booking.guestEmail(),
+        booking.topic(),
         booking.createdAt());
   }
 }

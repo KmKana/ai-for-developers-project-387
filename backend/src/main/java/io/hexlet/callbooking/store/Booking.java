@@ -12,4 +12,5 @@ public record Booking(
     Instant end,
     String guestName,
     String guestEmail,
+    String topic,
     OffsetDateTime createdAt) {}

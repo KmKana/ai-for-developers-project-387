@@ -132,6 +132,59 @@ class OpenApiConformanceTest {
   }
 
   @Test
+  void createBookingWithAndWithoutTopicConformToOpenApi() throws Exception {
+    MvcResult withTopic =
+        mvc.perform(
+                post("/api/bookings")
+                    .contentType(APPLICATION_JSON)
+                    .content(
+                        booking(
+                            typeId,
+                            iso(LocalDate.of(2026, 3, 11), 10, 0),
+                            "guest@example.com",
+                            "Гость",
+                            "Обсудить проект")))
+            .andReturn();
+    openApi.assertConforms("Api_createBooking", withTopic);
+
+    MvcResult withoutTopic =
+        mvc.perform(
+                post("/api/bookings")
+                    .contentType(APPLICATION_JSON)
+                    .content(booking(typeId, iso(LocalDate.of(2026, 3, 11), 11, 0))))
+            .andReturn();
+    openApi.assertConforms("Api_createBooking", withoutTopic);
+
+    MvcResult emojiTopic =
+        mvc.perform(
+                post("/api/bookings")
+                    .contentType(APPLICATION_JSON)
+                    .content(
+                        booking(
+                            typeId,
+                            iso(LocalDate.of(2026, 3, 11), 12, 0),
+                            "guest@example.com",
+                            "Гость",
+                            "😀".repeat(300))))
+            .andReturn();
+    openApi.assertConforms("Api_createBooking", emojiTopic);
+
+    MvcResult tooLong =
+        mvc.perform(
+                post("/api/bookings")
+                    .contentType(APPLICATION_JSON)
+                    .content(
+                        booking(
+                            typeId,
+                            iso(LocalDate.of(2026, 3, 11), 13, 0),
+                            "guest@example.com",
+                            "Гость",
+                            "я".repeat(301))))
+            .andReturn();
+    openApi.assertConforms("Api_createBooking", tooLong);
+  }
+
+  @Test
   void listBookingsResponseConformsToOpenApi() throws Exception {
     mvc.perform(
         post("/api/bookings")
@@ -176,11 +229,19 @@ class OpenApiConformanceTest {
 
   private String booking(String typeId, String start, String email, String guestName)
       throws Exception {
+    return booking(typeId, start, email, guestName, null);
+  }
+
+  private String booking(String typeId, String start, String email, String guestName, String topic)
+      throws Exception {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("meetingTypeId", typeId);
     payload.put("start", start);
     payload.put("guestName", guestName);
     payload.put("guestEmail", email);
+    if (topic != null) {
+      payload.put("topic", topic);
+    }
     return om.writeValueAsString(payload);
   }
 

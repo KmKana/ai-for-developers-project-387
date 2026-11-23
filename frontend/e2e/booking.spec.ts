@@ -33,6 +33,7 @@ test('гость записывается на слот, конфликт из �
   const typeName = `E2E встреча ${suffix}`;
   const guestName = `Гость ${suffix}`;
   const guestEmail = `guest-${suffix}@example.com`;
+  const topic = `Обсудить проект ${suffix}`;
   const staleGuestName = `Гость со старой страницы ${suffix}`;
   const staleGuestEmail = `stale-${suffix}@example.com`;
 
@@ -71,6 +72,7 @@ test('гость записывается на слот, конфликт из �
   await expect(page.getByTestId('submit-booking')).toBeEnabled();
   await page.getByTestId('guest-name').fill(guestName);
   await page.getByTestId('guest-email').fill(guestEmail);
+  await page.getByTestId('guest-topic').fill(topic);
   await page.getByTestId('submit-booking').click();
 
   const confirmation = page.getByTestId('booking-success');
@@ -78,13 +80,15 @@ test('гость записывается на слот, конфликт из �
   await expect(confirmation).toContainText(typeName);
   await expect(confirmation).toContainText(guestName);
   await expect(confirmation).toContainText(guestEmail);
+  await expect(confirmation).toContainText(topic);
 
-  // Владелец видит Запись сразу после подтверждения Гостя.
+  // Владелец видит Запись сразу после подтверждения Гостя, включая тему.
   await page.goto('/bookings');
   const ownerRow = page.getByTestId('booking-row').filter({ hasText: guestName });
   await expect(ownerRow).toBeVisible();
   await expect(ownerRow).toContainText(typeName);
   await expect(ownerRow).toContainText(guestEmail);
+  await expect(ownerRow).toContainText(topic);
 
   // Устаревшая вкладка отправляет тот же Слот после успешной Записи.
   await stalePage.getByTestId('submit-booking').click();
@@ -104,6 +108,7 @@ test('гость записывается на слот, конфликт из �
   expect(savedBookings).toHaveLength(1);
   expect(savedBookings[0].meetingTypeId).toBe(meetingType.id);
   expect(savedBookings[0].guestName).toBe(guestName);
+  expect(savedBookings[0].topic).toBe(topic);
   expect(savedBookings[0].start).toBe(staleStart);
 
   // После конфликта доступен другой актуальный Слот, вторая Запись не создана.

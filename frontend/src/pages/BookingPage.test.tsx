@@ -129,4 +129,29 @@ describe('Страница записи', () => {
     fireEvent.click(saturday!);
     expect(screen.queryAllByTestId('slot-button')).not.toHaveLength(0);
   });
+
+  it('показывает необязательное поле темы с подсказкой и предупреждением', async () => {
+    vi.mocked(apiListMeetingTypes).mockResolvedValue(
+      response(types, 'http://localhost/api/meeting-types'),
+    );
+    vi.mocked(apiListAvailableSlots).mockResolvedValue(
+      response(slots, 'http://localhost/api/slots'),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/book/type-intro']}>
+        <Routes>
+          <Route path="/book/:id" element={<BookingPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: 'Знакомство' });
+    const topicField = screen.getByTestId('guest-topic') as HTMLTextAreaElement;
+    expect(topicField.tagName).toBe('TEXTAREA');
+    expect(topicField.hasAttribute('required')).toBe(false);
+    expect(topicField.getAttribute('placeholder')).toBe('Кратко опишите, что хотите обсудить');
+    expect(topicField.getAttribute('maxlength')).toBe('300');
+    expect(screen.getByText(/Не указывайте конфиденциальные данные/)).toBeTruthy();
+  });
 });

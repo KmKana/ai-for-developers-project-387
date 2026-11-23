@@ -65,14 +65,28 @@ class BookingConcurrencyTest {
     assertSingleWinner(typeId, startAt(12, 0), 32);
   }
 
-  /** Все запросы идут через HTTP; проверяются и ответы, и итоговый список Владельца. */
+  /** Смешанные запросы: часть с темой, часть без неё конкурируют за один Слот одинаково. */
+  @Test
+  void onlyOneOfMixedRequestsWithAndWithoutTopicWinsTheSlot() throws Exception {
+    String typeId = createHalfHourType();
+
+    assertSingleWinner(typeId, startAt(13, 0), 20, true);
+  }
+
   private void assertSingleWinner(String typeId, String start, int requests) throws Exception {
+    assertSingleWinner(typeId, start, requests, false);
+  }
+
+  /** Все запросы идут через HTTP; проверяются и ответы, и итоговый список Владельца. */
+  private void assertSingleWinner(String typeId, String start, int requests, boolean mixedTopics)
+      throws Exception {
     ExecutorService pool = Executors.newFixedThreadPool(requests);
     try {
       List<Callable<ResponseEntity<String>>> tasks = new ArrayList<>();
       for (int i = 0; i < requests; i++) {
         int guestNo = i;
-        tasks.add(() -> postBooking(typeId, start, guestNo));
+        boolean withTopic = mixedTopics && guestNo % 2 == 0;
+        tasks.add(() -> postBooking(typeId, start, guestNo, withTopic));
       }
       List<Future<ResponseEntity<String>>> results = pool.invokeAll(tasks);
 
@@ -85,6 +99,11 @@ class BookingConcurrencyTest {
           JsonNode booking = objectMapper.readTree(response.getBody());
           assertThat(booking.get("id").asText()).isNotBlank();
           assertThat(booking.get("start").asText()).isEqualTo(start);
+          JsonNode topic = booking.get("topic");
+          if (topic != null && !topic.isNull()) {
+            assertThat(topic.asText()).isNotBlank();
+            assertThat(topic.asText()).isEqualTo(topic.asText().trim());
+          }
         } else {
           assertThat(response.getStatusCode().value()).isEqualTo(409);
           JsonNode error = objectMapper.readTree(response.getBody());
@@ -111,16 +130,22 @@ class BookingConcurrencyTest {
     }
   }
 
-  private ResponseEntity<String> postBooking(String typeId, String start, int guestNo) {
+  private ResponseEntity<String> postBooking(
+      String typeId, String start, int guestNo, boolean withTopic) throws Exception {
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
-    String body =
-        """
-                {"meetingTypeId":"%s","start":"%s",
-                 "guestName":"Guest %d","guestEmail":"guest%d@example.com"}
-                """
-            .formatted(typeId, start, guestNo, guestNo);
-    return rest.postForEntity("/api/bookings", new HttpEntity<>(body, headers), String.class);
+    var body =
+        objectMapper
+            .createObjectNode()
+            .put("meetingTypeId", typeId)
+            .put("start", start)
+            .put("guestName", "Guest " + guestNo)
+            .put("guestEmail", "guest" + guestNo + "@example.com");
+    if (withTopic) {
+      body.put("topic", "  Тема гостя " + guestNo + "  ");
+    }
+    return rest.postForEntity(
+        "/api/bookings", new HttpEntity<>(body.toString(), headers), String.class);
   }
 
   private String createHalfHourType() {

@@ -7,7 +7,7 @@ import java.time.OffsetDateTime;
 
 /** Данные для записи на слот. */
 public record BookingInputDto(
-    String meetingTypeId, OffsetDateTime start, String guestName, String guestEmail) {
+    String meetingTypeId, OffsetDateTime start, String guestName, String guestEmail, String topic) {
 
   /**
    * Клиент передаёт только начало: окончание всегда вычисляется сервером по длительности Типа

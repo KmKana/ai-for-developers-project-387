@@ -60,7 +60,8 @@ public class InMemoryStore {
       Instant start,
       Instant end,
       String guestName,
-      String guestEmail) {
+      String guestEmail,
+      String topic) {
     Booking conflict = BookingOverlap.conflict(bookings, start, end).orElse(null);
     if (conflict != null) {
       return new AddBookingResult(null, conflict);
@@ -74,6 +75,7 @@ public class InMemoryStore {
             end,
             guestName,
             guestEmail,
+            topic,
             OffsetDateTime.ofInstant(clock.instant(), BookingRules.ZONE));
     bookings.add(created);
     return new AddBookingResult(created, null);
