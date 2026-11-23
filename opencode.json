@@ -1,0 +1,22 @@
+{
+  "permission": {
+    "external_directory": {
+      "*": "deny"
+    },
+    "question": "deny",
+    "read": {
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    }
+  },
+  "experimental": {
+    "continue_loop_on_deny": true
+  },
+  "agent": {
+    "build": {
+      "steps": 20
+    }
+  },
+  "instructions": ["docs/agents/opencode-github.md"]
+}

@@ -31,12 +31,15 @@ jobs:
           persist-credentials: false
 
       # OpenCode находит .agents/skills автоматически (project compatibility path).
-      - name: Verify agent skills are available
+      - name: Verify OpenCode configuration and skills
         run: |
+          test -f opencode.json
+          test -f docs/agents/opencode-github.md
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.json','utf8'));for(const f of c.instructions||[]){if(!fs.existsSync(f))throw new Error('missing instruction file: '+f)}"
           test -f .agents/skills/to-spec/SKILL.md
           test -f .agents/skills/to-tickets/SKILL.md
           test -f .agents/skills/implement-spec/SKILL.md
-          echo "to-spec, to-tickets and implement-spec are available from .agents/skills"
+          echo "OpenCode config, instructions and agent skills are available"
 
       # Действие OpenCode чекаутит ветку PR, поэтому не передаём секреты в PR из форка.
       - name: Verify pull request is not from a fork
