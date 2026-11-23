@@ -1,0 +1,399 @@
+name: opencode review
+
+# Имя запуска — источник для счётчика бюджета. Оно содержит номер PR и SHA,
+# поэтому бюджет читается из истории GitHub Actions, а не из комментария.
+run-name: opencode review / ${{ github.event.pull_request.number }} / ${{ github.event.pull_request.head.sha }}
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Базовые права только на чтение. Секрет модели выдаётся только job'у review,
+# который не выполняется для PR из форков и для draft PR.
+permissions:
+  contents: read
+
+# Новый push отменяет устаревшее ревью. Отменённая попытка остаётся в истории
+# запусков и учитывается бюджетом.
+concurrency:
+  group: opencode-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Доверенный PR: ветка находится в этом же репозитории, а не в форке.
+    # Автор — владелец KmKana или GitHub App OpenCode (фактический login в API:
+    # opencode-agent[bot]; в gh отображается как app/opencode-agent).
+    # Release-please PR не тратят платный вызов модели: они исключены по ветке
+    # release-please-- и по автору github-actions.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !startsWith(github.event.pull_request.head.ref, 'release-please--') &&
+      github.event.pull_request.user.login != 'github-actions[bot]' &&
+      github.event.pull_request.user.login != 'app/github-actions' &&
+      (github.event.pull_request.user.login == 'KmKana' ||
+       github.event.pull_request.user.login == 'opencode-agent[bot]' ||
+       github.event.pull_request.user.login == 'app/opencode-agent')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      checks: read
+      actions: read
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact head SHA
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          actual="$(git rev-parse HEAD)"
+          echo "expected=$EXPECTED_SHA"
+          echo "actual=$actual"
+          test "$actual" = "$EXPECTED_SHA"
+
+      # PR, который меняет сам механизм ревью, не должен ревьюиться ослабленной
+      # версией этого механизма. Такой PR получает manual_review_required и
+      # проверяется человеком; модель не вызывается.
+      - name: Guard review infrastructure
+        id: guard
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$BASE_SHA"
+          fi
+          changed="$(
+            git diff --name-only "$BASE_SHA...$HEAD_SHA" -- \
+              .github/workflows/opencode.yml \
+              .github/workflows/opencode-review.yml \
+              .github/workflows/opencode-triage.yml \
+              .github/actions/opencode-pinned/action.yml \
+              scripts/opencode-budget.mjs \
+              opencode.json \
+              opencode.readonly.json \
+              opencode.review.json \
+              REVIEW.md \
+              docs/agents/review.md
+          )"
+          if [ -n "$changed" ]; then
+            echo "sensitive=true" >> "$GITHUB_OUTPUT"
+            echo "PR changes review infrastructure; automatic review is skipped:"
+            echo "$changed"
+          else
+            echo "sensitive=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Жёсткий бюджет: не более 2 автоматических вызовов модели на PR.
+      # Счётчик — история запусков GitHub Actions, включая повторные и
+      # отменённые попытки. Скрипт работает fail-closed.
+      - name: Check review budget
+        id: budget
+        if: steps.guard.outputs.sensitive != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          BUDGET_MODE: review
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MAX_CALLS: "2"
+        run: node scripts/opencode-budget.mjs
+
+      - name: Install pinned OpenCode
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        run: curl -fsSL https://opencode.ai/install | bash -s -- --version 1.19.6
+
+      - name: Verify pinned OpenCode
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        run: |
+          version="$("$HOME/.opencode/bin/opencode" --version)"
+          echo "OpenCode version: $version"
+          test "$version" = "1.19.6"
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Verify review configuration
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        run: |
+          test -f REVIEW.md
+          test -f opencode.review.json
+          test -f docs/agents/review.md
+          node -e "const fs=require('fs');const c=JSON.parse(fs.readFileSync('opencode.review.json','utf8'));if(c['\$schema']!=='https://opencode.ai/config.json')throw new Error('missing schema');if(c.default_agent!=='reviewer')throw new Error('default_agent must be reviewer');for(const p of ['edit','bash','task','webfetch','websearch','todowrite','question','lsp'])if(c.permission[p]!=='deny')throw new Error('missing deny for '+p);if(JSON.stringify(c.permission.skill)!=='{\"*\":\"deny\"}')throw new Error('skills must be denied');if(JSON.stringify(c.permission.external_directory)!=='{\"*\":\"deny\"}')throw new Error('external_directory must be denied');const a=c.agent&&c.agent.reviewer;if(!a||a.mode!=='primary'||a.permission.edit!=='deny'||a.permission.bash!=='deny'||a.permission.task!=='deny')throw new Error('reviewer agent is not read-only')"
+          echo "Reviewer configuration is read-only"
+
+      - name: Verify OPENCODE_API_KEY is configured
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
+        run: |
+          if [ -z "$OPENCODE_API_KEY" ]; then
+            echo "::error::No OpenCode API key secret. Add OPENCODE_API_KEY or SECRETPAY from the OpenCode Console workspace with a positive balance."
+            exit 1
+          fi
+
+      - name: Fetch review context
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p .ai-review
+          gh issue view 17 --json number,title,body,labels > .ai-review/spec-17.json
+          gh issue view 7 --json number,title,body,comments > .ai-review/agreement-7.json
+          gh pr view "$PR_NUMBER" --json number,title,body,baseRefName,headRefOid,author,commits,files > .ai-review/pr.json
+          gh pr checks "$PR_NUMBER" --json name,state,link > .ai-review/checks-initial.json 2> .ai-review/checks-error.txt || true
+
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$BASE_SHA"
+          fi
+          git diff --stat "$BASE_SHA...$HEAD_SHA" > .ai-review/diff-stat.txt
+          git diff "$BASE_SHA...$HEAD_SHA" > .ai-review/diff.patch
+          if [ "$(wc -c < .ai-review/diff.patch)" -gt 200000 ]; then
+            head -c 200000 .ai-review/diff.patch > .ai-review/diff-truncated.patch
+            mv .ai-review/diff-truncated.patch .ai-review/diff.patch
+            echo "Diff truncated at 200000 bytes; inspect the checkout for the rest." > .ai-review/diff-note.txt
+          fi
+          cp REVIEW.md .ai-review/REVIEW.md
+          echo "Context prepared for $HEAD_SHA"
+
+      # Ждём CI ограниченное время, чтобы ревью видело результаты, но не
+      # зависало из-за долгой браузерной проверки. 360 секунд — потолок ожидания,
+      # общий timeout job'а остаётся 20 минут.
+      - name: Wait for CI checks
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          timeout 360 gh pr checks "$PR_NUMBER" --watch --interval 20 > .ai-review/checks-watch.txt 2>&1
+          echo "gh pr checks exit=$?" >> .ai-review/checks-watch.txt
+          set -e
+          gh pr checks "$PR_NUMBER" --json name,state,link > .ai-review/checks-final.json 2> .ai-review/checks-final-error.txt || true
+          tail -50 .ai-review/checks-watch.txt || true
+
+      - name: Run independent reviewer
+        id: reviewer
+        if: steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY || secrets.SECRETPAY }}
+          MODEL_TIMEOUT_SECONDS: "480"
+        run: |
+          cat > .ai-review/prompt.txt <<'PROMPT'
+          Выполни независимое ревью Pull Request строго по REVIEW.md.
+
+          Прочитай в checkout:
+          - REVIEW.md (критерии ревью);
+          - .ai-review/REVIEW.md (копия для контекста);
+          - .ai-review/spec-17.json (согласованная спецификация);
+          - .ai-review/agreement-7.json (согласование объёма);
+          - .ai-review/pr.json (описание PR, файлы, коммиты);
+          - .ai-review/diff-stat.txt и .ai-review/diff.patch (diff);
+          - .ai-review/checks-initial.json, checks-watch.txt и checks-final.json
+            (результаты CI; часть проверок может быть ещё в процессе);
+          - .ai-review/diff-note.txt, если diff был обрезан.
+
+          Проверь именно этот head SHA. Не утверждай, что проверка прошла, если
+          этого нет в CI или в diff. Если данных не хватает, перечисли пробелы.
+
+          Формат ответа (без вступления и без disclaimer — workflow добавит его):
+          ## Итог
+          APPROVE | COMMENT | REQUEST_CHANGES — одно предложение.
+          ## Блокирующие замечания
+          Для каждого: `path:line`, что не так, почему это BLOCKER, как проверить,
+          критерий REVIEW.md §…
+          ## Некритичные замечания
+          ## Пробелы в тестах и доказательствах
+          ## Трассировка к спецификации #17
+          Пользовательские истории и критерии приёмки: выполнено / частично / нет.
+          ## Риск и откат
+          ## Что проверено
+          Что удалось прочитать и какие проверки были недоступны.
+
+          Ограничения:
+          - не меняй файлы, не выполняй команды, не создавай ветки, коммиты и PR;
+          - не вызывай навыки, подзадачи и сеть;
+          - не предлагай автоматически применить исправления;
+          - не раскрывай секреты и значения токенов;
+          - пиши по-русски, не длиннее 800 слов.
+          PROMPT
+
+          export OPENCODE_CONFIG_CONTENT="$(cat opencode.review.json)"
+          set +e
+          timeout --signal=TERM --kill-after=20s "$MODEL_TIMEOUT_SECONDS" \
+            opencode run \
+              --model opencode/deepseek-v4.1-flash \
+              --agent reviewer \
+              "$(cat .ai-review/prompt.txt)" \
+            > .ai-review/review.md 2> .ai-review/opencode.log
+          code=$?
+          set -e
+
+          if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+            echo timeout > .ai-review/status
+            echo "::error::Independent reviewer timed out"
+            exit 1
+          fi
+          if [ "$code" -ne 0 ]; then
+            echo agent_failed > .ai-review/status
+            echo "::error::Independent reviewer failed with exit code $code"
+            exit 1
+          fi
+          if [ ! -s .ai-review/review.md ]; then
+            echo agent_failed > .ai-review/status
+            echo "::error::Independent reviewer produced no output"
+            exit 1
+          fi
+          echo reviewed > .ai-review/status
+
+      - name: Verify reviewer did not change tracked files
+        if: always() && steps.guard.outputs.sensitive != 'true' && steps.budget.outputs.allowed == 'true'
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "::error::Reviewer modified tracked files; reverting"
+            git status --short
+            git checkout -- .
+            echo agent_failed > .ai-review/status
+            echo "reviewer modified tracked files" > .ai-review/failure-reason.txt
+          fi
+
+      # Единственная точка публикации. Она же сообщает limit_exhausted,
+      # infra_failed, timeout и agent_failed. Комментарий — только уведомление,
+      # счётчик бюджета хранится в истории запусков.
+      - name: Publish review result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BUDGET_ALLOWED: ${{ steps.budget.outputs.allowed }}
+          BUDGET_REASON: ${{ steps.budget.outputs.reason }}
+          BUDGET_USED: ${{ steps.budget.outputs.used }}
+          BUDGET_LIMIT: ${{ steps.budget.outputs.limit }}
+          SENSITIVE: ${{ steps.guard.outputs.sensitive }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p .ai-review
+
+          post_notice() {
+            marker="$1"
+            body="$2"
+            existing="$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[].body' 2>/dev/null || true)"
+            if printf '%s' "$existing" | grep -Fq "$marker"; then
+              echo "Notice already present: $marker"
+              return 0
+            fi
+            printf '%s' "$body" > .ai-review/status-comment.md
+            gh pr comment "$PR_NUMBER" --body-file .ai-review/status-comment.md
+          }
+
+          if [ "$SENSITIVE" = "true" ]; then
+            post_notice "review_status: manual_review_required" "$(cat <<EOF
+          > *This message was generated by the OpenCode review guard, not by the model.*
+
+          \`review_status: manual_review_required\`
+
+          PR #$PR_NUMBER меняет инфраструктуру ревью (workflow, бюджетный скрипт,
+          конфигурацию OpenCode или REVIEW.md), поэтому автоматическое ревью
+          пропущено: нельзя проверять механизм его же изменённой версией.
+          Нужно ручное ревью человеком.
+
+          Head SHA: \`$HEAD_SHA\`
+          [Логи запуска]($RUN_URL)
+          EOF
+          )"
+            exit 0
+          fi
+
+          if [ "$BUDGET_ALLOWED" != "true" ]; then
+            if [ "$BUDGET_REASON" = "same_sha_reviewed" ]; then
+              echo "Head SHA already reviewed; skipping without a model call."
+              exit 0
+            fi
+            if [ "$BUDGET_REASON" = "limit_exhausted" ]; then
+              post_notice "review_status: limit_exhausted" "$(cat <<EOF
+          > *This message was generated by the OpenCode review guard, not by the model.*
+
+          \`review_status: limit_exhausted\`
+
+          Для PR #$PR_NUMBER исчерпан бюджет автоматических ревью: $BUDGET_USED из $BUDGET_LIMIT.
+          Учитываются повторные и отменённые запуски. Новый вызов модели не выполнялся.
+
+          Head SHA: \`$HEAD_SHA\`
+          [Логи запуска]($RUN_URL)
+
+          Чтобы получить новое ревью, откройте новый PR или измените бюджет
+          отдельным согласованным PR. Автоматические исправления не запускаются.
+          EOF
+          )"
+              exit 0
+            fi
+            post_notice "review_status: infra_failed" "$(cat <<EOF
+          > *This message was generated by the OpenCode review guard, not by the model.*
+
+          \`review_status: infra_failed\`
+
+          Не удалось проверить бюджет или подготовить ревью для PR #$PR_NUMBER.
+          Модель не вызывалась. Проверьте логи и повторите запуск после исправления.
+
+          Head SHA: \`$HEAD_SHA\`
+          [Логи запуска]($RUN_URL)
+          EOF
+          )"
+            exit 0
+          fi
+
+          status="$(cat .ai-review/status 2>/dev/null || true)"
+          if [ "$status" = "reviewed" ] && [ -s .ai-review/review.md ]; then
+            sed -e 's/\x1b\[[0-9;]*m//g' -e '/^> .* · /d' .ai-review/review.md > .ai-review/review-clean.md
+            if [ "$(wc -c < .ai-review/review-clean.md)" -gt 60000 ]; then
+              head -c 60000 .ai-review/review-clean.md > .ai-review/review-short.md
+              mv .ai-review/review-short.md .ai-review/review-clean.md
+              printf '\n\n_Отчёт обрезан по лимиту GitHub._\n' >> .ai-review/review-clean.md
+            fi
+            {
+              printf '%s\n' '> *This review was generated by AI. It does not modify code.*'
+              printf '\n`review_status: reviewed`\n'
+              printf 'Head SHA: `%s`\n' "$HEAD_SHA"
+              printf 'Auto-review budget: `%s/%s`\n\n' "$BUDGET_USED" "$BUDGET_LIMIT"
+              cat .ai-review/review-clean.md
+            } > .ai-review/review-published.md
+            gh pr review "$PR_NUMBER" --comment --body-file .ai-review/review-published.md
+            exit 0
+          fi
+
+          if [ -z "$status" ]; then status=infra_failed; fi
+          post_notice "review_status: $status" "$(cat <<EOF
+          > *This message was generated by the OpenCode review guard, not by the model.*
+
+          \`review_status: $status\`
+
+          Автоматическое ревью PR #$PR_NUMBER не опубликовано. Код не изменялся.
+          Проверьте логи и повторите запуск после исправления причины.
+
+          Head SHA: \`$HEAD_SHA\`
+          [Логи запуска]($RUN_URL)
+          EOF
+          )"
+
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-${{ github.event.pull_request.head.sha }}
+          path: .ai-review
+          if-no-files-found: warn
+          retention-days: 7

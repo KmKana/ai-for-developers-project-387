@@ -74,7 +74,7 @@ cd frontend && npm run dev
 mise run check
 ```
 
-Он включает Spotless, ESLint/Prettier, JUnit 5 (включая контрактные тесты и `BookingConcurrencyTest`), Vitest, проверку типов и сборку React, проверку расхождений OpenAPI/SDK, тесты самого шлюза и release-please, а затем браузерный Playwright E2E. Отдельно:
+Он включает Spotless, ESLint/Prettier, JUnit 5 (включая контрактные тесты и `BookingConcurrencyTest`), Vitest, проверку типов и сборку React, проверку расхождений OpenAPI/SDK, тесты самого шлюза, release-please и бюджета OpenCode, а затем браузерный Playwright E2E. Отдельно:
 
 ```bash
 cd backend && ./mvnw test        # JUnit 5
@@ -125,6 +125,16 @@ Job `opencode-readonly` передаёт `OPENCODE_CONFIG_CONTENT` из `opencod
 Если секрет `OPENCODE_API_KEY` не задан в **Settings → Secrets and variables → Actions**, добавьте его там перед проверкой: workflow не может работать без ключа и никогда не печатает его значение.
 
 Для проверки автоматического triage откройте новое Issue от аккаунта `KmKana`: должен появиться отдельный запуск `opencode triage` и комментарий с разбором. Технические тикеты с меткой `ready-for-agent` (как Issue #17–#21) triage не запускают — это можно проверить по истории запусков workflow, не создавая новые Issue.
+
+### Бюджет вызовов и независимое ревью PR
+
+Интерактивные вызовы `/oc` ограничены **тремя вызовами модели на один PR**. Проверка выполняется до вызова модели в `.github/workflows/opencode.yml`; счётчик — история запусков GitHub Actions, где имя запуска содержит номер PR. Повторные (`Re-run`) и отменённые попытки учитываются, а удаление или редактирование комментария бюджет не увеличивает: у агента нет прав на изменение истории запусков. При исчерпании публикуется `budget_status: limit_exhausted` с head SHA и ссылкой на логи; если историю не удалось прочитать, срабатывает fail-closed `budget_status: infra_failed`.
+
+Отдельный `.github/workflows/opencode-review.yml` запускается на `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`) и делает независимое ревью для PR из этого же репозитория от `KmKana` или GitHub App OpenCode (фактический login бота — `opencode-agent[bot]`). Draft PR, release-please PR и PR из форков пропускаются; `pull_request_target` не используется, поэтому секрет модели не попадает в недоверенный форк. Ревьюер — отдельный агент `reviewer` из `opencode.review.json`: ему запрещены `edit`, `bash`, `task`, сеть, навыки и вопросы, он не получает `GH_TOKEN`, а результат публикует workflow как review от `github-actions[bot]`. Ревьюер читает `REVIEW.md`, спецификацию #17, согласование #7, diff и результаты CI. На PR допускается не более **двух** автоматических вызовов модели, повторный head SHA не ревьюится; статусы `reviewed`, `limit_exhausted`, `same_sha_reviewed`, `timeout`, `agent_failed`, `infra_failed`, `manual_review_required` публикуются в PR. PR, меняющий саму инфраструктуру ревью, получает `manual_review_required` и проверяется человеком. Исправления по комментарию ревьюера автоматически не запускаются.
+
+`REVIEW.md` содержит критерии ревью: защита от пересечений, конкурентные запросы, корректность Слотов, тема разговора до 300 символов, цепочка TypeSpec → OpenAPI → SDK → Spring Boot → React, регрессии, публичный доступ к данным, доказательства CI и откат. Шаблон PR — `.github/pull_request_template.md`; правила запуска, бюджета и прав — `docs/agents/review.md`.
+
+Независимая браузерная проверка `.github/workflows/pr-browser-check.yml` запускается отдельно от `check`, проверяет точный head SHA PR, поднимает реальные Spring Boot и React и всегда сохраняет Playwright trace/HTML-отчёт в артефакт `playwright-pr-<sha>`. Артефакт с другим SHA не считается доказательством.
 
 ## Запуск через Docker
 
