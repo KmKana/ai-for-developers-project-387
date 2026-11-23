@@ -1,0 +1,68 @@
+name: opencode
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  id-token: write
+
+# Один активный запуск на Issue/PR: у issues и PR общее пространство номеров.
+concurrency:
+  group: opencode-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  opencode:
+    if: >-
+      github.event.comment.user.login == 'KmKana' &&
+      github.event.comment.user.type != 'Bot' &&
+      (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # OpenCode находит .agents/skills автоматически (project compatibility path).
+      - name: Verify agent skills are available
+        run: |
+          test -f .agents/skills/to-spec/SKILL.md
+          test -f .agents/skills/to-tickets/SKILL.md
+          test -f .agents/skills/implement-spec/SKILL.md
+          echo "to-spec, to-tickets and implement-spec are available from .agents/skills"
+
+      # Действие OpenCode чекаутит ветку PR, поэтому не передаём секреты в PR из форка.
+      - name: Verify pull request is not from a fork
+        id: pr_source
+        if: github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const number = context.payload.pull_request?.number ?? context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: number,
+            });
+            const trusted = pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            core.setOutput('trusted', trusted ? 'true' : 'false');
+            if (!trusted) {
+              core.info(`PR #${number} head is in ${pr.head.repo.full_name}; skipping the step that uses secrets.`);
+            }
+
+      - name: Run OpenCode
+        if: steps.pr_source.outputs.trusted != 'false'
+        uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        with:
+          model: opencode/deepseek-v4.1-flash-free
+          mentions: /opencode,/oc
+          share: false
