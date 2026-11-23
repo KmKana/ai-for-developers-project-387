@@ -96,6 +96,20 @@ class OwnerBookingsApiTest {
   }
 
   @Test
+  void topicAppearsInOwnerListOnlyForBookingsThatHaveIt() throws Exception {
+    String typeId = createType("Знакомство", 30);
+    createBooking(
+        typeId, "2026-03-11T05:00:00Z", "С темой", "topic@example.com", "Обсудить проект");
+    createBooking(typeId, "2026-03-11T06:00:00Z", "Без темы", "no-topic@example.com");
+
+    mvc.perform(get("/api/bookings"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$", hasSize(2)))
+        .andExpect(jsonPath("$[0].topic").value("Обсудить проект"))
+        .andExpect(jsonPath("$[1].topic").doesNotExist());
+  }
+
+  @Test
   void bookingsOfSeveralTypesAreSortedByStart() throws Exception {
     String introId = createType("Знакомство", 30);
     String deepDiveId = createType("Разбор", 45);
@@ -178,12 +192,21 @@ class OwnerBookingsApiTest {
 
   private String createBooking(String typeId, String start, String guestName, String guestEmail)
       throws Exception {
+    return createBooking(typeId, start, guestName, guestEmail, null);
+  }
+
+  private String createBooking(
+      String typeId, String start, String guestName, String guestEmail, String topic)
+      throws Exception {
     var body =
         om.createObjectNode()
             .put("meetingTypeId", typeId)
             .put("start", start)
             .put("guestName", guestName)
             .put("guestEmail", guestEmail);
+    if (topic != null) {
+      body.put("topic", topic);
+    }
     return mvc.perform(post("/api/bookings").contentType(APPLICATION_JSON).content(body.toString()))
         .andExpect(status().isCreated())
         .andReturn()

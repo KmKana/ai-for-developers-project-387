@@ -88,6 +88,23 @@ describe('Список предстоящих Записей Владельца'
     expect(screen.getByText('Создано: 10 марта в 12:00')).toBeTruthy();
   });
 
+  it('показывает тему разговора только при наличии', async () => {
+    const withTopic: Booking = {
+      ...booking('booking-1', 'Иван Петров'),
+      topic: 'Обсудить проект',
+    };
+    const withoutTopic = booking('booking-2', 'Без темы');
+    vi.mocked(apiListBookings).mockResolvedValue(response([withTopic, withoutTopic], url));
+
+    render(<BookingsPage />);
+
+    expect(await screen.findByText('Обсудить проект')).toBeTruthy();
+    const rows = screen.getAllByTestId('booking-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].querySelector('.booking-topic')?.textContent).toBe('Обсудить проект');
+    expect(rows[1].querySelector('.booking-topic')).toBeNull();
+  });
+
   it('показывает новую Запись без ручного обновления страницы', async () => {
     vi.mocked(apiListBookings)
       .mockResolvedValueOnce(bookingResponse([]))

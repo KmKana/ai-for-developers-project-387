@@ -20,6 +20,11 @@ public class BookingService {
 
   private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
+  /** Лимит темы в кодовых точках Unicode — та же единица, что у maxLength в OpenAPI. */
+  private static final int TOPIC_MAX_CODE_POINTS = 300;
+
+  private static final String TOPIC_TOO_LONG_MESSAGE = "Тема разговора не длиннее 300 символов";
+
   private final InMemoryStore store;
   private final BookingRules rules;
 
@@ -80,15 +85,70 @@ public class BookingService {
       throw new ApiRequestException(409, ApiErrorCode.OFF_GRID);
     }
 
+    // Тема проверяется после календарных правил: запрос с некорректным Слотом
+    // по-прежнему получает 409 (например, OFF_GRID), а не 400 из-за длины темы.
+    String topic = normalizeTopic(input.topic());
+
     // Единственная проверка доступности выполняется под монитором хранилища вместе с созданием
     // Записи: гонка между проверкой и добавлением исключена.
     var result =
         store.tryAddBooking(
-            type.id(), type.name(), startInstant, endInstant, guestName, guestEmail);
+            type.id(), type.name(), startInstant, endInstant, guestName, guestEmail, topic);
     if (result.conflict() != null) {
       throw slotConflict();
     }
     return toDto(result.created());
+  }
+
+  /**
+   * Тема необязательна: пробелы по краям обрезаются, пустая строка равнозначна отсутствию темы.
+   * Длина проверяется после обрезки в кодовых точках Unicode, как {@code maxLength} в контракте.
+   * Обрезка учитывает Unicode-пробелы, которые {@link String#trim()} не покрывает (NBSP, U+2003,
+   * U+FEFF): иначе тема из одних таких символов считалась бы непустой.
+   */
+  private static String normalizeTopic(String topic) {
+    if (topic == null) {
+      return null;
+    }
+    String trimmed = trimTopicEdges(topic);
+    if (trimmed.isEmpty()) {
+      return null;
+    }
+    if (trimmed.codePointCount(0, trimmed.length()) > TOPIC_MAX_CODE_POINTS) {
+      throw new ApiRequestException(400, ApiErrorCode.VALIDATION_ERROR, TOPIC_TOO_LONG_MESSAGE);
+    }
+    return trimmed;
+  }
+
+  /** Обрезает Unicode-пробелы по краям, не разрезая суррогатные пары. */
+  private static String trimTopicEdges(String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end) {
+      int codePoint = value.codePointAt(start);
+      if (!isTopicWhitespace(codePoint)) {
+        break;
+      }
+      start += Character.charCount(codePoint);
+    }
+    while (end > start) {
+      int codePoint = value.codePointBefore(end);
+      if (!isTopicWhitespace(codePoint)) {
+        break;
+      }
+      end -= Character.charCount(codePoint);
+    }
+    return value.substring(start, end);
+  }
+
+  /**
+   * Пробелы, которые JavaScript {@code trim()} и Unicode считают краями строки. {@link
+   * String#strip()} не покрывает NBSP и U+FEFF, поэтому проверяем явно.
+   */
+  private static boolean isTopicWhitespace(int codePoint) {
+    return Character.isWhitespace(codePoint)
+        || Character.isSpaceChar(codePoint)
+        || codePoint == 0xFEFF;
   }
 
   private static ApiRequestException slotConflict() {
@@ -108,6 +168,7 @@ public class BookingService {
         OffsetDateTime.ofInstant(booking.end(), BookingRules.ZONE),
         booking.guestName(),
         booking.guestEmail(),
+        booking.topic(),
         booking.createdAt());
   }
 }

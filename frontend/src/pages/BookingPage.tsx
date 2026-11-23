@@ -14,6 +14,13 @@ import {
   slotDurationMinutes,
 } from '../util/format';
 
+/** Лимит темы в кодовых точках Unicode — та же единица, что у maxLength в контракте. */
+const TOPIC_MAX_CODE_POINTS = 300;
+
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
 /** Страница записи: календарь на 14 дней, слоты и форма гостя. */
 export default function BookingPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,9 +35,15 @@ export default function BookingPage() {
 
   const [guestName, setGuestName] = useState('');
   const [guestEmail, setGuestEmail] = useState('');
+  const [topic, setTopic] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
   const [booked, setBooked] = useState<Booking | null>(null);
+
+  // Та же нормализация, что на сервере: пробелы по краям не входят в лимит.
+  // Array.from считает кодовые точки Unicode, а не UTF-16 code units.
+  const trimmedTopic = topic.trim();
+  const topicTooLong = codePointLength(trimmedTopic) > TOPIC_MAX_CODE_POINTS;
 
   const load = useCallback(async () => {
     if (!id) {
@@ -79,7 +92,7 @@ export default function BookingPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!id || !selectedSlot) {
+    if (!id || !selectedSlot || topicTooLong) {
       return;
     }
     setSubmitting(true);
@@ -90,6 +103,7 @@ export default function BookingPage() {
         start: selectedSlot.start,
         guestName,
         guestEmail,
+        ...(trimmedTopic ? { topic: trimmedTopic } : {}),
       });
       setBooked(booking);
     } catch (e) {
@@ -128,6 +142,12 @@ export default function BookingPage() {
                 {booked.guestName} · {booked.guestEmail}
               </dd>
             </div>
+            {booked.topic && (
+              <div>
+                <dt>Тема разговора</dt>
+                <dd className="booking-topic">{booked.topic}</dd>
+              </div>
+            )}
           </dl>
           <Link className="btn btn-secondary" to="/catalog">
             Записаться ещё раз
@@ -260,11 +280,37 @@ export default function BookingPage() {
               required
             />
           </label>
+          <label>
+            Тема разговора (необязательно)
+            <textarea
+              data-testid="guest-topic"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="Кратко опишите, что хотите обсудить"
+              aria-invalid={topicTooLong}
+              aria-describedby={topicTooLong ? 'topic-length-error' : undefined}
+              rows={3}
+            />
+          </label>
+          {topicTooLong && (
+            <p
+              id="topic-length-error"
+              className="banner banner-error"
+              data-testid="topic-length-error"
+              role="alert"
+            >
+              Тема разговора не длиннее 300 символов
+            </p>
+          )}
+          <p className="muted small">
+            Не указывайте конфиденциальные данные: тема и контакты видны всем, кто знает адрес
+            сервиса.
+          </p>
           <button
             className="btn"
             type="submit"
             data-testid="submit-booking"
-            disabled={!selectedSlot || submitting}
+            disabled={!selectedSlot || submitting || topicTooLong}
           >
             {selectedSlot
               ? `Подтвердить запись на ${formatDateTime(selectedSlot.start)}`

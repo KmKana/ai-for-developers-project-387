@@ -494,6 +494,11 @@ h3 {
   flex-wrap: wrap;
 }
 
+.booking-topic {
+  flex-basis: 100%;
+  white-space: pre-wrap;
+}
+
 /* Служебные блоки */
 .banner {
   border-radius: 12px;
