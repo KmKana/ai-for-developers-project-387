@@ -1,0 +1,58 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "auditor",
+  "permission": {
+    "edit": "deny",
+    "bash": "deny",
+    "task": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": {
+      "*": "deny"
+    },
+    "question": "deny",
+    "todowrite": "deny",
+    "skill": {
+      "*": "deny"
+    },
+    "lsp": "deny",
+    "read": {
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    }
+  },
+  "agent": {
+    "auditor": {
+      "mode": "primary",
+      "description": "Read-only Lighthouse audit analyst for scheduled-audit.",
+      "prompt": "You are a read-only performance analyst. Read the actual Lighthouse report and summary in scheduled-audit-output. Identify one concrete problem with consequences and a possible fix. Do not modify files, run shell commands, use the network, call gh, create Issues or Pull Requests, or invoke skills and subagents. The workflow publishes the Issue.",
+      "steps": 30,
+      "permission": {
+        "*": "allow",
+        "edit": "deny",
+        "bash": "deny",
+        "task": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": {
+          "*": "deny"
+        },
+        "question": "deny",
+        "todowrite": "deny",
+        "skill": {
+          "*": "deny"
+        },
+        "lsp": "deny",
+        "read": {
+          "*.env": "deny",
+          "*.env.*": "deny",
+          "*.env.example": "allow"
+        }
+      }
+    }
+  },
+  "experimental": {
+    "continue_loop_on_deny": true
+  }
+}
